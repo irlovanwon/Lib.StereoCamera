@@ -1,0 +1,239 @@
+================================================================================
+ARCHITECTURE BLUEPRINT — Lib.StereoCamera (Project: One)
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+1. TECH STACK & ENVIRONMENT
+────────────────────────────────────────────────────────────────────────────────
+
+| Layer              | Technology                                         |
+|--------------------|----------------------------------------------------|
+| Language (Core)    | C++17                                              |
+| Language (GUI)     | JavaScript (ES6+), HTML5                           |
+| Build System       | CMake (structured CMakeLists.txt mandatory)        |
+| Messaging          | ZeroMQ (ZMQ) — IPC + TCP                           |
+| Admin Protocol     | HTTPS (TLS mandatory)                              |
+| Serialization      | JSON (config), ZMQ frames (data)                    |
+| WebSocket          | WSS server for API 3 (web client data streaming)    |
+| Frontend Framework | React + Redux Toolkit                              |
+| 3D Visualization   | Three.js                                           |
+| Web Server         | Nginx (HTTPS:443, HTTP→HTTPS redirect:80)          |
+| Testing (C++)      | Google Test (gtest)                                |
+| Testing (JS)       | Jest + React Testing Library                       |
+| Config Format      | JSON (.json), dedicated config/ folder             |
+| Target Platforms   | Linux (ubuntu-home01: dev, EDGE01: deploy)         |
+| VCS                | Git — github.com/irlovanwon/Lib.StereoCamera       |
+
+────────────────────────────────────────────────────────────────────────────────
+2. CORE ARCHITECTURAL GOAL
+────────────────────────────────────────────────────────────────────────────────
+
+StereoCamera is a standalone C++ module that:
+  (a) Abstracts multiple stereo camera hardware brands behind a unified API.
+  (b) Captures stereo image pairs, computes disparity/depth maps and point clouds.
+  (c) Buffers and persists captured data before distribution.
+  (d) Streams data to N downstream clients simultaneously via ZMQ PUB/SUB (API 2) and WebSocket (API 3).
+  (e) Exposes full admin control (init, connect, capture, params) via HTTPS.
+  (f) Provides a React-based GUI for monitoring, 3D visualization, and config.
+
+Design Principles:
+  - Multi-brand compatibility via API 1 hardware abstraction.
+  - Graceful feature degradation: every parameter carries an `is_available` flag.
+  - Independent module: communicates only via HTTPS, ZMQ, WebSocket, or IoT interfaces.
+  - Zero duplication: shared code lives in a top-level library/ folder.
+
+────────────────────────────────────────────────────────────────────────────────
+3. MODULE ARCHITECTURE
+────────────────────────────────────────────────────────────────────────────────
+
+  ┌──────────────┐   API 1    ┌──────────────────────────┐   API 2   ┌──────────────┐
+  │  Camera SDK  │◄──────────►│    StereoCamera Module   │◄─────────►│    Client    │
+  │  (N brands)  │  HTTPS+ZMQ │                          │  HTTPS+ZMQ│  Software    │
+  └──────────────┘            │  ┌────────────────────┐  │           └──────────────┘
+                               │  │ Data Module        │  │
+  ┌──────────────┐            │  │  - Buffer          │  │           ┌──────────────┐
+  │     GUI      │◄──────────►│  │  - Storage         │  │           │  Client N    │
+  │  (React)     │  HTTPS+WSS │  │  - Logging         │  │           │  (subscribes)│
+  └──────────────┘            │  │  - Config Mgmt     │  │           └──────────────┘
+                               │  └────────────────────┘  │
+  ┌──────────────┐            │  ┌────────────────────┐  │
+  │  Web Client  │◄──────────►│  │ Stereo Vision Algo │  │
+  │  (Browser)   │  API 3     │  │  - Disparity Map   │  │
+  └──────────────┘ HTTPS+WSS  │  │  - Depth Map       │  │
+                               │  │  - Point Cloud     │  │
+                               │  └────────────────────┘  │
+                               │  ┌────────────────────┐  │
+                               │  │ Calibration        │  │
+                               │  │  - 2D / 3D         │  │
+                               │  └────────────────────┘  │
+                               └──────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────────
+4. API INTERFACE CONTRACTS
+────────────────────────────────────────────────────────────────────────────────
+
+4.1 API 1 — Camera SDK ↔ StereoCamera Module
+─────────────────────────────────────────────
+
+  ADMIN (HTTPS): Module = HTTPS Client, Camera SDK = HTTPS Server
+
+  See commands.md for full command definitions.
+
+  DATA (ZMQ): Socket = Dealer↔Dealer, Max = 1 simultaneous connection
+
+  - Each queue supports multiple data types per StartCapture command.
+  - Timestamp-grouped data bundles on same queue (e.g., L+R images + point cloud).
+  - Data types: Stereo Images, Depth Maps, Point Cloud, IMU, Disparity Map, Confidence Map.
+
+4.2 API 2 — StereoCamera Module ↔ Client Software
+──────────────────────────────────────────────────
+
+  ADMIN (HTTPS): Module = HTTPS Server, Client = HTTPS Client
+
+  See commands.md for full command definitions. Init is idempotent.
+
+  DATA (ZMQ): Socket = PUB/SUB, Supports N simultaneous clients
+
+  - Clients subscribe to channels for desired data types.
+  - Timestamp-grouped data bundles on same channel.
+  - Buffer in Data Module serves all subscribers without re-fetching from camera.
+
+4.3 API 3 — StereoCamera Module ↔ Web Client
+──────────────────────────────────────────────
+
+  ADMIN (HTTPS): Module = HTTPS Server, Web Client = HTTPS Client
+
+  See commands.md for full command definitions. Init is idempotent.
+
+  DATA (WebSocket/WSS): Module = WSS Server, Supports N simultaneous web clients
+
+  - After WebSocket handshake, clients subscribe to topics via JSON messages.
+  - Topic format: <camera_id>/<DataType>
+  - Binary frames for image/point cloud data; JSON frames for control/status.
+  - Timestamp-grouped data bundles on same topic.
+  - Buffer in Data Module serves all web clients without re-fetching from camera.
+
+────────────────────────────────────────────────────────────────────────────────
+5. DATA TYPES
+────────────────────────────────────────────────────────────────────────────────
+
+| Data Type              | Description                                        |
+|------------------------|----------------------------------------------------|
+| Stereo Images          | N image pairs (left + right) per frame             |
+| Depth Maps             | Per-pixel depth derived from stereo                |
+| Point Cloud            | 3D spatial data (X, Y, Z)                          |
+| IMU Data               | Acceleration + angular velocity                    |
+| Disparity Map          | Pixel-level L/R displacement                       |
+| Confidence/Error Maps  | Per-pixel confidence for depth; enables filtering  |
+
+────────────────────────────────────────────────────────────────────────────────
+6. PARAMETERS
+────────────────────────────────────────────────────────────────────────────────
+
+Every parameter carries: { value, is_readonly: bool, is_available: bool }
+
+| Parameter     | Type         | Unit        | R/W    |
+|---------------|--------------|-------------|--------|
+| FPS           | Integer      | fps         | R/W    |
+| Exposure Time | Integer      | nanoseconds | R/W    |
+| Gain          | Float        | —           | R/W    |
+| Auto-Exposure | Enum On/Off  | —           | R/W    |
+| Auto-Gain     | Enum On/Off  | —           | R/W    |
+
+────────────────────────────────────────────────────────────────────────────────
+7. GUI MODULE CONTRACT
+────────────────────────────────────────────────────────────────────────────────
+
+  Stack: React + Redux Toolkit + Three.js, served by Nginx (HTTPS:443).
+
+  Pages:
+  | Page          | Regions / Functions                                |
+  |---------------|----------------------------------------------------|
+  | Overview      | 2D image display, 3D point cloud, status bar,      |
+  |               | Connect/Disconnect buttons                         |
+  | 3D Viewer     | Dedicated point cloud + depth map visualization    |
+  | 2D Viewer     | Dedicated stereo image viewer                      |
+  | IMU Viewer    | Dedicated IMU data visualization                   |
+  | Configuration | Parameter management interface                     |
+
+  Rules:
+  - State: Redux Toolkit (global), useState/useReducer (local only).
+  - Multi-user: concurrent access, session-isolated UI state, shared live state.
+  - Real-time: WebSocket/SSE broadcast to all connected clients.
+  - Responsive: mobile-first, flexbox/grid, rem/% units, tested on all form factors.
+  - Reverse proxy: single port 443, path-based routing to internal services.
+
+────────────────────────────────────────────────────────────────────────────────
+8. DATA MODULE CONTRACT
+────────────────────────────────────────────────────────────────────────────────
+
+  Buffering:
+  - Retains captured data between API 1 ingestion and API 2/API 3 distribution.
+  - Single buffer serves all N API 2 and API 3 clients without re-fetching.
+
+  Storage:
+  - Supports multiple storage backends (extensible).
+
+  Logging:
+  - System events and user events.
+
+  Config Management:
+  - All active parameters persisted and synced to JSON config file.
+  - Config files in dedicated config/ directory.
+
+────────────────────────────────────────────────────────────────────────────────
+9. THREAD MODEL & CONCURRENCY
+────────────────────────────────────────────────────────────────────────────────
+
+  [To be refined during implementation. Baseline constraints:]
+
+  - API 1 Data: ZMQ Dealer↔Dealer = single connection, sequential or dedicated thread.
+  - API 2 Data: ZMQ PUB = dedicated publish thread, N SUB clients async.
+  - API 3 Data: WebSocket server = dedicated thread, N WSS client sessions async.
+  - Admin HTTPS: blocking request-response, thread-per-connection or async handler.
+  - Data Module buffer: must be thread-safe for concurrent read (N clients) + write (capture).
+  - Stereo Vision processing: may run on dedicated thread or be pipelined with capture.
+  - GUI: browser-side only; communicates with module via API 3 (HTTPS + WSS).
+
+────────────────────────────────────────────────────────────────────────────────
+10. INFRASTRUCTURE & DEPLOYMENT
+────────────────────────────────────────────────────────────────────────────────
+
+| Server         | IP             | User     | Role         | Project Path                    |
+|----------------|----------------|----------|--------------|---------------------------------|
+| ubuntu-home01  | 100.86.203.33  | irlovan  | Development  | /home/irlovan/Downloads/Project/One |
+| EDGE01         | 100.85.117.73  | user     | Deployment   | /home/user/ECIDS/StereoCamera  |
+
+────────────────────────────────────────────────────────────────────────────────
+11. CODING STANDARDS (MANDATORY)
+────────────────────────────────────────────────────────────────────────────────
+
+  - C++: CMake build, C++17 standard.
+  - File signature: VIATECH-GENERAL header on every source file.
+  - No code duplication: shared code → library/ folder.
+  - Comments: inline only for non-obvious logic. No obvious-code comments.
+  - No dead code, no unused imports.
+  - Config: JSON format, config/ directory.
+  - Testing: gtest (C++), Jest (JS); 80% coverage on new code; tests in tests/ or __tests__/.
+  - CI: tests must pass before merge; pipeline blocks on failure.
+
+────────────────────────────────────────────────────────────────────────────────
+12. KEY CONSTRAINTS & RULES
+────────────────────────────────────────────────────────────────────────────────
+
+  [C1]  API 1 Data = max 1 simultaneous ZMQ connection per camera SDK.
+  [C2]  API 2 Data = N simultaneous ZMQ SUB clients supported.
+  [C3]  All admin communication = HTTPS (TLS mandatory).
+  [C4]  Every parameter response includes is_available + is_readonly flags.
+  [C5]  Data bundles grouped by timestamp travel on the same queue/channel.
+  [C6]  Module is fully independent — no direct coupling beyond HTTPS/ZMQ boundaries.
+  [C7]  StartCapture/StopCapture are per-data-type, not all-or-nothing.
+  [C8]  Init is idempotent: second Init from another client returns success.
+  [C9]  GUI single external port (443), path-based reverse proxy routing.
+  [C10] Responsive design: must function on mobile through desktop.
+  [C11] API 3 Data = N simultaneous WebSocket (WSS) clients supported.
+  [C12] API 3 admin = HTTPS (TLS mandatory), same command set as API 2.
+
+================================================================================
+END OF BLUEPRINT
+================================================================================
