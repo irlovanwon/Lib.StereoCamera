@@ -1,0 +1,158 @@
+#include "stereo_camera/api/AdminServer.h"
+#include "stereo_camera/common/Logger.h"
+#include <nlohmann/json.hpp>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <thread>
+#include <sstream>
+
+namespace stereo_camera {
+
+struct AdminServer::Impl {
+    std::string host;
+    uint16_t port;
+    std::string cert_path;
+    std::string key_path;
+    std::shared_ptr<ClientHandler> handler;
+    std::shared_ptr<ParameterManager> param_mgr;
+    int server_fd = -1;
+    bool running = false;
+    std::thread accept_thread;
+
+    void start() {
+        server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (server_fd < 0) {
+            Logger::instance().error("AdminServer", "Failed to create socket");
+            return;
+        }
+
+        int opt = 1;
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+        struct sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = INADDR_ANY;
+
+        if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+            Logger::instance().error("AdminServer", "Failed to bind");
+            return;
+        }
+
+        if (listen(server_fd, 10) < 0) {
+            Logger::instance().error("AdminServer", "Failed to listen");
+            return;
+        }
+
+        running = true;
+        Logger::instance().info("AdminServer", "Listening on " + host + ":" + std::to_string(port));
+
+        SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+        if (!ctx) {
+            Logger::instance().error("AdminServer", "Failed to create SSL context");
+            return;
+        }
+
+        if (SSL_CTX_use_certificate_file(ctx, cert_path.c_str(), SSL_FILETYPE_PEM) <= 0 ||
+            SSL_CTX_use_PrivateKey_file(ctx, key_path.c_str(), SSL_FILETYPE_PEM) <= 0) {
+            Logger::instance().error("AdminServer", "Failed to load cert/key");
+            SSL_CTX_free(ctx);
+            return;
+        }
+
+        accept_thread = std::thread([this, ctx]() {
+            while (running) {
+                struct sockaddr_in client_addr{};
+                socklen_t client_len = sizeof(client_addr);
+                int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+                if (client_fd < 0) continue;
+
+                SSL* ssl = SSL_new(ctx);
+                SSL_set_fd(ssl, client_fd);
+
+                if (SSL_accept(ssl) <= 0) {
+                    SSL_free(ssl);
+                    close(client_fd);
+                    continue;
+                }
+
+                char buf[4096] = {};
+                int n = SSL_read(ssl, buf, sizeof(buf) - 1);
+                if (n > 0 && handler) {
+                    std::string request(buf, n);
+                    auto resp = route(request);
+                    std::string resp_str = resp.dump();
+                    SSL_write(ssl, resp_str.c_str(), resp_str.size());
+                }
+
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+                close(client_fd);
+            }
+            SSL_CTX_free(ctx);
+        });
+    }
+
+    nlohmann::json route(const std::string& request) {
+        try {
+            auto j = nlohmann::json::parse(request);
+            std::string cmd = j.value("command", "");
+            std::string client_id = j.value("client_id", "default");
+
+            Response resp;
+
+            if (cmd == "init")          resp = handler->handle_init(client_id);
+            else if (cmd == "dispose")   resp = handler->handle_dispose(client_id);
+            else if (cmd == "connect")   resp = handler->handle_connect(client_id);
+            else if (cmd == "disconnect") resp = handler->handle_disconnect(client_id);
+            else if (cmd == "check_status") resp = handler->handle_check_status(client_id);
+            else resp = make_response(ResponseCode::Error, "Unknown command");
+
+            nlohmann::json result;
+            result["code"] = static_cast<int>(resp.code);
+            result["message"] = resp.message;
+            result["detail"] = resp.detail;
+            return result;
+        } catch (const std::exception& e) {
+            nlohmann::json result;
+            result["code"] = static_cast<int>(ResponseCode::Error);
+            result["message"] = std::string("Parse error: ") + e.what();
+            return result;
+        }
+    }
+
+    void stop() {
+        running = false;
+        if (server_fd >= 0) {
+            shutdown(server_fd, SHUT_RDWR);
+            close(server_fd);
+            server_fd = -1;
+        }
+        if (accept_thread.joinable()) {
+            accept_thread.join();
+        }
+        Logger::instance().info("AdminServer", "Stopped");
+    }
+};
+
+AdminServer::AdminServer(const std::string& host, uint16_t port,
+                         const std::string& cert_path, const std::string& key_path)
+    : impl_(std::make_unique<Impl>(Impl{host, port, cert_path, key_path, nullptr, nullptr, -1, false, {}})) {}
+
+AdminServer::~AdminServer() { stop(); }
+
+void AdminServer::set_client_handler(std::shared_ptr<ClientHandler> handler) {
+    impl_->handler = std::move(handler);
+}
+
+void AdminServer::set_parameter_manager(std::shared_ptr<ParameterManager> param_mgr) {
+    impl_->param_mgr = std::move(param_mgr);
+}
+
+void AdminServer::start() { impl_->start(); }
+void AdminServer::stop() { impl_->stop(); }
+
+} // namespace stereo_camera

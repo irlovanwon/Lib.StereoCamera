@@ -1,0 +1,24 @@
+{
+    "module": {
+        "name": "StereoCamera",
+        "version": "1.0.0"
+    },
+    "server": {
+        "host": "0.0.0.0",
+        "port": 9443
+    },
+    "camera_sdks": [
+        {
+            "id": "zed_x_mini_0",
+            "base_url": "https://localhost:8443",
+            "zmq_endpoint": "ipc:///tmp/zed_vision"
+        }
+    ],
+    "buffer": {
+        "max_frames_per_slot": 3
+    },
+    "pub": {
+        "endpoint": "tcp://*:5556"
+    },
+    "parameters": []
+}
