@@ -17,6 +17,7 @@ namespace stereo_camera {
 struct SDKSlot {
     std::string camera_id;
     std::string zmq_endpoint;
+    std::unordered_map<std::string, std::string> channels;
     std::shared_ptr<CameraSDKClient> client;
     std::unique_ptr<std::thread> dealer_thread;
     std::atomic<bool> capturing{false};
@@ -28,6 +29,7 @@ struct CameraSDKConfig {
     std::string id;
     std::string base_url;
     std::string zmq_endpoint;
+    std::unordered_map<std::string, std::string> channels;
 };
 
 class SDKSlotManager {
@@ -50,8 +52,9 @@ public:
     void set_data_callback(DataReceivedCallback callback);
 
 private:
-    void dealer_loop(const std::string& camera_id, const std::string& zmq_endpoint);
+    void dealer_loop(const std::string& camera_id, std::unordered_map<std::string, std::string> channels);
     bool capturing_active(const std::string& camera_id) const;
+    static DataType channel_to_datatype(const std::string& channel);
 
     mutable std::mutex mutex_;
     std::shared_ptr<DataBuffer> buffer_;

@@ -8,8 +8,33 @@
 #include <unistd.h>
 #include <thread>
 #include <sstream>
+#include <algorithm>
+#include <cctype>
 
 namespace stereo_camera {
+
+static std::string to_lower(const std::string& s) {
+    std::string out = s;
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return out;
+}
+
+static std::string path_to_command(const std::string& path) {
+    std::string p = path;
+    if (!p.empty() && p[0] == '/') p = p.substr(1);
+    std::string lower = to_lower(p);
+    if (lower == "checkstatus")    return "check_status";
+    if (lower == "init")           return "init";
+    if (lower == "dispose")        return "dispose";
+    if (lower == "connect")        return "connect";
+    if (lower == "disconnect")     return "disconnect";
+    if (lower == "startcapture")   return "start_capture";
+    if (lower == "stopcapture")    return "stop_capture";
+    if (lower == "setparameter")   return "set_parameter";
+    if (lower == "getparameter")   return "get_parameter";
+    return lower;
+}
 
 struct AdminServer::Impl {
     std::string host;
@@ -68,7 +93,10 @@ struct AdminServer::Impl {
                 struct sockaddr_in client_addr{};
                 socklen_t client_len = sizeof(client_addr);
                 int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
-                if (client_fd < 0) continue;
+                if (client_fd < 0) {
+                    if (running) continue;
+                    break;
+                }
 
                 SSL* ssl = SSL_new(ctx);
                 SSL_set_fd(ssl, client_fd);
@@ -79,13 +107,52 @@ struct AdminServer::Impl {
                     continue;
                 }
 
-                char buf[4096] = {};
+                char buf[65536] = {};
                 int n = SSL_read(ssl, buf, sizeof(buf) - 1);
                 if (n > 0 && handler) {
-                    std::string request(buf, n);
-                    auto resp = route(request);
-                    std::string resp_str = resp.dump();
-                    SSL_write(ssl, resp_str.c_str(), resp_str.size());
+                    std::string raw(buf, n);
+
+                    std::string method = "GET";
+                    std::string path = "/";
+                    std::string body;
+
+                    auto header_end = raw.find("\r\n\r\n");
+                    if (header_end != std::string::npos) {
+                        std::string header = raw.substr(0, header_end);
+                        body = raw.substr(header_end + 4);
+
+                        auto first_space = header.find(' ');
+                        if (first_space != std::string::npos) {
+                            method = header.substr(0, first_space);
+                            auto second_space = header.find(' ', first_space + 1);
+                            if (second_space != std::string::npos) {
+                                path = header.substr(first_space + 1, second_space - first_space - 1);
+                            }
+                        }
+                    } else {
+                        body = raw;
+                    }
+
+                    std::string cmd = path_to_command(path);
+
+                    if (!body.empty() && body[0] == '{') {
+                        try {
+                            auto j = nlohmann::json::parse(body);
+                            if (j.contains("command")) cmd = j.value("command", cmd);
+                        } catch (...) {}
+                    }
+
+                    auto resp = route(cmd, body);
+                    std::string json_str = resp.dump();
+
+                    std::string http_resp =
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: application/json\r\n"
+                        "Content-Length: " + std::to_string(json_str.size()) + "\r\n"
+                        "Connection: close\r\n"
+                        "\r\n" + json_str;
+
+                    SSL_write(ssl, http_resp.c_str(), http_resp.size());
                 }
 
                 SSL_shutdown(ssl);
@@ -96,32 +163,60 @@ struct AdminServer::Impl {
         });
     }
 
-    nlohmann::json route(const std::string& request) {
-        try {
-            auto j = nlohmann::json::parse(request);
-            std::string cmd = j.value("command", "");
-            std::string client_id = j.value("client_id", "default");
+    nlohmann::json route(const std::string& cmd, const std::string& body) {
+        std::string client_id = "default";
+        nlohmann::json j;
 
-            Response resp;
-
-            if (cmd == "init")          resp = handler->handle_init(client_id);
-            else if (cmd == "dispose")   resp = handler->handle_dispose(client_id);
-            else if (cmd == "connect")   resp = handler->handle_connect(client_id);
-            else if (cmd == "disconnect") resp = handler->handle_disconnect(client_id);
-            else if (cmd == "check_status") resp = handler->handle_check_status(client_id);
-            else resp = make_response(ResponseCode::Error, "Unknown command");
-
-            nlohmann::json result;
-            result["code"] = static_cast<int>(resp.code);
-            result["message"] = resp.message;
-            result["detail"] = resp.detail;
-            return result;
-        } catch (const std::exception& e) {
-            nlohmann::json result;
-            result["code"] = static_cast<int>(ResponseCode::Error);
-            result["message"] = std::string("Parse error: ") + e.what();
-            return result;
+        if (!body.empty() && body[0] == '{') {
+            try {
+                j = nlohmann::json::parse(body);
+                client_id = j.value("client_id", "default");
+            } catch (...) {
+                return {{"code", static_cast<int>(ResponseCode::Error)},
+                        {"message", "Invalid JSON body"}};
+            }
         }
+
+        Response resp;
+
+        if (cmd == "init")          resp = handler->handle_init(client_id);
+        else if (cmd == "dispose")   resp = handler->handle_dispose(client_id);
+        else if (cmd == "connect")   resp = handler->handle_connect(client_id);
+        else if (cmd == "disconnect") resp = handler->handle_disconnect(client_id);
+        else if (cmd == "check_status") resp = handler->handle_check_status(client_id);
+        else if (cmd == "start_capture") {
+            std::vector<DataType> types;
+            if (j.contains("data_types")) {
+                for (auto& dt : j["data_types"]) types.push_back(dt.get<DataType>());
+            }
+            resp = handler->handle_start_capture(client_id, types);
+        }
+        else if (cmd == "stop_capture") {
+            std::vector<DataType> types;
+            if (j.contains("data_types")) {
+                for (auto& dt : j["data_types"]) types.push_back(dt.get<DataType>());
+            }
+            resp = handler->handle_stop_capture(client_id, types);
+        }
+        else if (cmd == "set_parameter") {
+            std::string pname = j.value("name", "");
+            ParameterValue pv;
+            if (j.contains("value")) {
+                auto& v = j["value"];
+                if (v.is_number_integer()) pv.int_val = v.get<int>();
+                else if (v.is_number_float()) pv.float_val = v.get<double>();
+                else if (v.is_string()) pv.enum_val = v.get<std::string>();
+            }
+            resp = handler->handle_set_parameter(client_id, pname, pv);
+        }
+        else if (cmd == "get_parameter") resp = handler->handle_get_parameter(client_id, j.value("name", ""));
+        else resp = make_response(ResponseCode::Error, "Unknown command: " + cmd);
+
+        nlohmann::json result;
+        result["code"] = static_cast<int>(resp.code);
+        result["message"] = resp.message;
+        result["detail"] = resp.detail;
+        return result;
     }
 
     void stop() {

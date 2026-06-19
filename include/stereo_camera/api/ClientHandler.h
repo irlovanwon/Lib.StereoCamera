@@ -3,8 +3,11 @@
 #include "stereo_camera/common/Types.h"
 #include "stereo_camera/common/Response.h"
 #include <string>
+#include <memory>
 
 namespace stereo_camera {
+
+class SDKSlotManager;
 
 struct ClientSession {
     std::string id;
@@ -14,6 +17,8 @@ struct ClientSession {
 class ClientHandler {
 public:
     ClientHandler() = default;
+
+    void set_sdk_manager(std::shared_ptr<SDKSlotManager> mgr);
 
     Response handle_init(const std::string& client_id);
     Response handle_dispose(const std::string& client_id);
@@ -26,6 +31,7 @@ public:
     Response handle_get_parameter(const std::string& client_id, const std::string& name);
 
 private:
+    std::shared_ptr<SDKSlotManager> sdk_manager_;
     std::unordered_map<std::string, ClientSession> sessions_;
     bool module_initialized_ = false;
 };

@@ -9,13 +9,15 @@
 namespace stereo_camera {
 
 enum class DataType : uint8_t {
-    StereoImage  = 0,
-    DepthMap     = 1,
-    PointCloud   = 2,
-    IMU          = 3,
-    DisparityMap = 4,
+    StereoImage   = 0,
+    DepthMap      = 1,
+    PointCloud    = 2,
+    IMU           = 3,
+    DisparityMap  = 4,
     ConfidenceMap = 5,
     Temperature   = 6,
+    Magnetometer  = 7,
+    Barometer     = 8,
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(DataType, {
@@ -26,6 +28,8 @@ NLOHMANN_JSON_SERIALIZE_ENUM(DataType, {
     {DataType::DisparityMap, "disparity_map"},
     {DataType::ConfidenceMap, "confidence_map"},
     {DataType::Temperature, "temperature"},
+    {DataType::Magnetometer, "magnetometer"},
+    {DataType::Barometer, "barometer"},
 })
 
 struct Timestamp {
@@ -73,5 +77,20 @@ struct Response {
     std::string message;
     nlohmann::json detail;
 };
+
+inline std::string data_type_to_channel(DataType dt) {
+    switch (dt) {
+        case DataType::StereoImage:  return "stereo_image";
+        case DataType::DepthMap:     return "depth_map";
+        case DataType::PointCloud:   return "point_cloud";
+        case DataType::IMU:          return "imu";
+        case DataType::DisparityMap: return "disparity_map";
+        case DataType::ConfidenceMap: return "confidence_map";
+        case DataType::Temperature:  return "temperature";
+        case DataType::Magnetometer: return "magnetometer";
+        case DataType::Barometer:    return "barometer";
+    }
+    return "unknown";
+}
 
 } // namespace stereo_camera

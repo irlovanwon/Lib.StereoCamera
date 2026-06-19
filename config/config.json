@@ -1,0 +1,74 @@
+{
+  "api1": {
+    "camera_sdk": {
+      "host": "127.0.0.1",
+      "port": 8443,
+      "cert_path": "",
+      "timeout_ms": 5000
+    },
+    "data": {
+      "transport": "ipc",
+      "channels": {
+        "left_image": "ipc:///tmp/zed_vision_left_image",
+        "right_image": "ipc:///tmp/zed_vision_right_image",
+        "depth_map": "ipc:///tmp/zed_vision_depth_map",
+        "point_cloud": "ipc:///tmp/zed_vision_point_cloud",
+        "imu": "ipc:///tmp/zed_vision_imu",
+        "disparity_map": "ipc:///tmp/zed_vision_disparity_map",
+        "confidence_map": "ipc:///tmp/zed_vision_confidence_map",
+        "temperature": "ipc:///tmp/zed_vision_temperature",
+        "base": "ipc:///tmp/zed_vision"
+      }
+    }
+  },
+  "api2": {
+    "server": {
+      "host": "0.0.0.0",
+      "port": 8444,
+      "cert_path": "",
+      "key_path": "",
+      "thread_strategy": "hybrid",
+      "worker_threads": 4
+    },
+    "data": {
+      "transport": "ipc",
+      "pub_endpoints": {
+        "stereo_image": "ipc:///tmp/sc_pub_stereo_image",
+        "depth_map": "ipc:///tmp/sc_pub_depth_map",
+        "point_cloud": "ipc:///tmp/sc_pub_point_cloud",
+        "imu": "ipc:///tmp/sc_pub_imu",
+        "magnetometer": "ipc:///tmp/sc_pub_magnetometer",
+        "barometer": "ipc:///tmp/sc_pub_barometer"
+      }
+    }
+  },
+  "api3": {
+    "admin_server": {
+      "host": "127.0.0.1",
+      "port": 9443,
+      "cert_path": "config/server.crt",
+      "key_path": "config/server.key",
+      "thread_strategy": "hybrid",
+      "worker_threads": 4
+    },
+    "data": {
+      "wss_server": {
+        "host": "127.0.0.1",
+        "port": 9444,
+        "cert_path": "",
+        "key_path": "",
+        "thread_strategy": "one_loop_per_thread",
+        "worker_threads": 2
+      },
+      "sub_endpoints": {
+        "stereo_image": "ipc:///tmp/sc_pub_stereo_image",
+        "depth_map": "ipc:///tmp/sc_pub_depth_map",
+        "point_cloud": "ipc:///tmp/sc_pub_point_cloud",
+        "imu": "ipc:///tmp/sc_pub_imu",
+        "magnetometer": "ipc:///tmp/sc_pub_magnetometer",
+        "barometer": "ipc:///tmp/sc_pub_barometer"
+      }
+    }
+  },
+  "log_level": "info"
+}

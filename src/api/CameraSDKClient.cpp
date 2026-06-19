@@ -27,7 +27,8 @@ struct CameraSDKClient::Impl {
         curl_easy_reset(curl);
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
 
         std::string response_data;
@@ -66,26 +67,27 @@ CameraSDKClient::~CameraSDKClient() = default;
 
 Response CameraSDKClient::init() {
     Logger::instance().info("CameraSDKClient", "Sending Init");
-    return impl_->http_post("/api/init");
+    return impl_->http_post("/api/init", {{"command", "init"}});
 }
 
 Response CameraSDKClient::dispose() {
     Logger::instance().info("CameraSDKClient", "Sending Dispose");
-    return impl_->http_post("/api/dispose");
+    return impl_->http_post("/api/dispose", {{"command", "dispose"}});
 }
 
 Response CameraSDKClient::connect() {
     Logger::instance().info("CameraSDKClient", "Sending Connect");
-    return impl_->http_post("/api/connect");
+    return impl_->http_post("/api/connect", {{"command", "connect"}});
 }
 
 Response CameraSDKClient::disconnect() {
     Logger::instance().info("CameraSDKClient", "Sending Disconnect");
-    return impl_->http_post("/api/disconnect");
+    return impl_->http_post("/api/disconnect", {{"command", "disconnect"}});
 }
 
 Response CameraSDKClient::start_capture(const std::vector<DataType>& types) {
     nlohmann::json j;
+    j["command"] = "start_capture";
     j["data_types"] = types;
     Logger::instance().info("CameraSDKClient", "Sending StartCapture");
     return impl_->http_post("/api/start_capture", j);
@@ -93,24 +95,64 @@ Response CameraSDKClient::start_capture(const std::vector<DataType>& types) {
 
 Response CameraSDKClient::stop_capture(const std::vector<DataType>& types) {
     nlohmann::json j;
+    j["command"] = "stop_capture";
     j["data_types"] = types;
     Logger::instance().info("CameraSDKClient", "Sending StopCapture");
     return impl_->http_post("/api/stop_capture", j);
 }
 
+Response CameraSDKClient::activate_channel(const std::string& channel_name) {
+    nlohmann::json j;
+    j["command"] = "activate_channel";
+    j["data_type"] = channel_name;
+    Logger::instance().info("CameraSDKClient", "Activating channel: " + channel_name);
+    return impl_->http_post("/api/activate_channel", j);
+}
+
+Response CameraSDKClient::deactivate_channel(const std::string& channel_name) {
+    nlohmann::json j;
+    j["command"] = "deactivate_channel";
+    j["data_type"] = channel_name;
+    return impl_->http_post("/api/deactivate_channel", j);
+}
+
+Response CameraSDKClient::start_capture_by_channels(const std::vector<std::string>& channels) {
+    nlohmann::json j;
+    j["command"] = "start_capture";
+    j["data_types"] = channels;
+    Logger::instance().info("CameraSDKClient", "Sending StartCapture (channels)");
+    return impl_->http_post("/api/start_capture", j);
+}
+
+Response CameraSDKClient::stop_capture_by_channels(const std::vector<std::string>& channels) {
+    nlohmann::json j;
+    j["command"] = "stop_capture";
+    j["data_types"] = channels;
+    Logger::instance().info("CameraSDKClient", "Sending StopCapture (channels)");
+    return impl_->http_post("/api/stop_capture", j);
+}
+
 Response CameraSDKClient::check_status() {
-    return impl_->http_post("/api/check_status");
+    return impl_->http_post("/api/check_status", {{"command", "check_status"}});
 }
 
 Response CameraSDKClient::set_parameter(const std::string& name, const ParameterValue& value) {
     nlohmann::json j;
+    j["command"] = "set_parameter";
     j["name"] = name;
-    j["value"] = value.int_val;
+    if (!value.enum_val.empty()) {
+        j["value"] = value.enum_val;
+    } else if (value.float_val != 0.0) {
+        j["value"] = value.float_val;
+    } else {
+        j["value"] = value.int_val;
+    }
     return impl_->http_post("/api/set_parameter", j);
 }
 
 Response CameraSDKClient::get_parameter(const std::string& name) {
     nlohmann::json j;
+    j["command"] = "get_parameter";
     j["name"] = name;
     return impl_->http_post("/api/get_parameter", j);
 }

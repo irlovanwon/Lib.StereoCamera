@@ -1,1 +1,26 @@
 build/
+log/
+*.log
+*.pid
+*.bak
+*.bak2
+*.swp
+*.tmp
+
+# Certs (do not commit)
+config/server.crt
+config/server.key
+
+# CMake generated
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+install_manifest.txt
+
+# Testing
+Testing/
+.cache/
+__pycache__/
+*.pyc

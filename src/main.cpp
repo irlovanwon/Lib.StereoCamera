@@ -19,59 +19,6 @@ static void signal_handler(int) {
     g_running = false;
 }
 
-static std::vector<stereo_camera::CameraSDKConfig> load_sdk_configs(const std::string& config_dir) {
-    std::vector<stereo_camera::CameraSDKConfig> configs;
-    std::string path = config_dir + "/default.json";
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        stereo_camera::Logger::instance().warn("Main", "No config file: " + path);
-        return configs;
-    }
-    try {
-        auto json = nlohmann::json::parse(file);
-        if (json.contains("camera_sdks") && json["camera_sdks"].is_array()) {
-            for (const auto& sdk : json["camera_sdks"]) {
-                stereo_camera::CameraSDKConfig cfg;
-                cfg.id = sdk.value("id", "");
-                cfg.base_url = sdk.value("base_url", "");
-                cfg.zmq_endpoint = sdk.value("zmq_endpoint", "");
-                if (!cfg.id.empty() && !cfg.base_url.empty() && !cfg.zmq_endpoint.empty()) {
-                    configs.push_back(cfg);
-                }
-            }
-        }
-    } catch (const std::exception& e) {
-        stereo_camera::Logger::instance().error("Main", std::string("Config parse error: ") + e.what());
-    }
-    return configs;
-}
-
-static size_t load_buffer_depth(const std::string& config_dir) {
-    std::string path = config_dir + "/default.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return 3;
-    try {
-        auto json = nlohmann::json::parse(file);
-        if (json.contains("buffer")) {
-            return json["buffer"].value("max_frames_per_slot", 3);
-        }
-    } catch (...) {}
-    return 3;
-}
-
-static std::string load_pub_endpoint(const std::string& config_dir) {
-    std::string path = config_dir + "/default.json";
-    std::ifstream file(path);
-    if (!file.is_open()) return "tcp://*:5556";
-    try {
-        auto json = nlohmann::json::parse(file);
-        if (json.contains("pub")) {
-            return json["pub"].value("endpoint", "tcp://*:5556");
-        }
-    } catch (...) {}
-    return "tcp://*:5556";
-}
-
 int main(int argc, char* argv[]) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
@@ -79,69 +26,61 @@ int main(int argc, char* argv[]) {
     stereo_camera::Logger::instance().set_level(stereo_camera::Logger::Level::Debug);
 
     const std::string config_dir = (argc > 1) ? argv[1] : "./config";
-    const std::string cert_path = (argc > 2) ? argv[2] : "./config/server.crt";
-    const std::string key_path  = (argc > 3) ? argv[3] : "./config/server.key";
-
-    size_t buffer_depth = load_buffer_depth(config_dir);
-    std::string pub_endpoint = load_pub_endpoint(config_dir);
-    auto sdk_configs = load_sdk_configs(config_dir);
-
-    auto param_mgr = std::make_shared<stereo_camera::ParameterManager>();
-    stereo_camera::Parameter fps_param;
-    fps_param.name = "fps";
-    fps_param.type = stereo_camera::ParameterType::Integer;
-    fps_param.value.int_val = 30;
-    fps_param.is_readonly = false;
-    fps_param.is_available = true;
-    param_mgr->define(fps_param);
-
-    stereo_camera::Parameter exposure_param;
-    exposure_param.name = "exposure_time";
-    exposure_param.type = stereo_camera::ParameterType::Integer;
-    exposure_param.value.int_val = 10000000;
-    exposure_param.is_readonly = false;
-    exposure_param.is_available = true;
-    param_mgr->define(exposure_param);
-
-    stereo_camera::Parameter gain_param;
-    gain_param.name = "gain";
-    gain_param.type = stereo_camera::ParameterType::Float;
-    gain_param.value.float_val = 1.0;
-    gain_param.is_readonly = false;
-    gain_param.is_available = true;
-    param_mgr->define(gain_param);
-
-    stereo_camera::Parameter auto_exposure;
-    auto_exposure.name = "auto_exposure";
-    auto_exposure.type = stereo_camera::ParameterType::Enum;
-    auto_exposure.value.enum_val = "Off";
-    auto_exposure.is_readonly = false;
-    auto_exposure.is_available = true;
-    param_mgr->define(auto_exposure);
-
-    stereo_camera::Parameter auto_gain;
-    auto_gain.name = "auto_gain";
-    auto_gain.type = stereo_camera::ParameterType::Enum;
-    auto_gain.value.enum_val = "Off";
-    auto_gain.is_readonly = false;
-    auto_gain.is_available = true;
-    param_mgr->define(auto_gain);
 
     auto config_mgr = std::make_shared<stereo_camera::ConfigManager>(config_dir);
+    config_mgr->load_app_config();
+    auto& cfg = config_mgr->app_config();
+
+    if (cfg.log_level == "info") {
+        stereo_camera::Logger::instance().set_level(stereo_camera::Logger::Level::Info);
+    } else if (cfg.log_level == "warn") {
+        stereo_camera::Logger::instance().set_level(stereo_camera::Logger::Level::Warn);
+    }
+
+    size_t buffer_depth = 3;
+
+    auto param_mgr = std::make_shared<stereo_camera::ParameterManager>();
     config_mgr->set_parameter_manager(param_mgr);
     config_mgr->load("parameters.json");
 
     auto buffer = std::make_shared<stereo_camera::DataBuffer>(buffer_depth);
-    auto sdk_manager = std::make_shared<stereo_camera::SDKSlotManager>(buffer);
-    auto publisher = std::make_shared<stereo_camera::DataPublisher>(buffer, pub_endpoint);
 
+    auto sdk_manager = std::make_shared<stereo_camera::SDKSlotManager>(buffer);
+
+    std::vector<stereo_camera::CameraSDKConfig> sdk_configs;
+    stereo_camera::CameraSDKConfig sdk_cfg;
+    sdk_cfg.id = "cam1";
+    sdk_cfg.base_url = "https://" + cfg.api1.host + ":" + std::to_string(cfg.api1.port);
+    auto it_base = cfg.api1.channels.find("base");
+    if (it_base != cfg.api1.channels.end()) {
+        sdk_cfg.zmq_endpoint = it_base->second;
+    } else {
+        sdk_cfg.zmq_endpoint = "ipc:///tmp/zed_vision";
+    }
+    sdk_cfg.channels = cfg.api1.channels;
+    sdk_configs.push_back(sdk_cfg);
     sdk_manager->configure(sdk_configs);
-    sdk_manager->set_data_callback([](const std::string& cam_id, const std::shared_ptr<stereo_camera::DataBundle>&) {
+
+    auto publisher = std::make_shared<stereo_camera::DataPublisher>(buffer, cfg.api2.data.pub_endpoints);
+
+    sdk_manager->set_data_callback([&publisher](const std::string& cam_id,
+        const std::shared_ptr<stereo_camera::DataBundle>& bundle) {
+        (void)cam_id;
+        (void)bundle;
     });
 
     auto client_handler = std::make_shared<stereo_camera::ClientHandler>();
+    client_handler->set_sdk_manager(sdk_manager);
 
-    stereo_camera::AdminServer server("0.0.0.0", 9443, cert_path, key_path);
+    const std::string& api3_cert = cfg.api3.admin_server.cert_path;
+    const std::string& api3_key = cfg.api3.admin_server.key_path;
+    std::string cert_path = api3_cert.empty() ? config_dir + "/server.crt" : api3_cert;
+    std::string key_path = api3_key.empty() ? config_dir + "/server.key" : api3_key;
+
+    stereo_camera::AdminServer server(
+        cfg.api3.admin_server.host,
+        static_cast<uint16_t>(cfg.api3.admin_server.port),
+        cert_path, key_path);
     server.set_client_handler(client_handler);
     server.set_parameter_manager(param_mgr);
     server.start();
@@ -149,10 +88,11 @@ int main(int argc, char* argv[]) {
     publisher->start();
 
     stereo_camera::Logger::instance().info("Main", "StereoCamera node started");
-    stereo_camera::Logger::instance().info("Main", "Buffer depth: " + std::to_string(buffer_depth));
-    stereo_camera::Logger::instance().info("Main", "PUB endpoint: " + pub_endpoint);
-    stereo_camera::Logger::instance().info("Main", "SDKs configured: " + std::to_string(sdk_configs.size()));
-    std::cout << "StereoCamera module running. Press Ctrl+C to stop." << std::endl;
+    stereo_camera::Logger::instance().info("Main", std::string("API 3a HTTPS: ") + cfg.api3.admin_server.host + ":" + std::to_string(cfg.api3.admin_server.port));
+    stereo_camera::Logger::instance().info("Main", "API 2b PUB endpoints: " +
+        std::to_string(cfg.api2.data.pub_endpoints.size()));
+    stereo_camera::Logger::instance().info("Main", "API 1a Camera SDK: " +
+        sdk_cfg.base_url);
 
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

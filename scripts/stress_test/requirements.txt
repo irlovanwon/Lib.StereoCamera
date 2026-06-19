@@ -1,0 +1,4 @@
+websockets>=12.0
+pyzmq>=25.0
+aiohttp>=3.9
+psutil>=5.9
