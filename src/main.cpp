@@ -22,6 +22,7 @@ static void signal_handler(int) {
 int main(int argc, char* argv[]) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
+    std::signal(SIGPIPE, SIG_IGN);
 
     stereo_camera::Logger::instance().set_level(stereo_camera::Logger::Level::Debug);
 
