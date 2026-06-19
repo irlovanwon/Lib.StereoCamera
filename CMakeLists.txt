@@ -25,6 +25,7 @@ set(LIB_SOURCES
     src/data/SDKSlotManager.cpp
     src/data/DataPublisher.cpp
     src/data/LoopbackSubscriber.cpp
+    src/data/WSServer.cpp
     src/vision/DisparityMap.cpp
     src/vision/DepthMap.cpp
     src/vision/PointCloud.cpp

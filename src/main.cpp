@@ -6,6 +6,7 @@
 #include "stereo_camera/data/DataBuffer.h"
 #include "stereo_camera/data/DataPublisher.h"
 #include "stereo_camera/data/LoopbackSubscriber.h"
+#include "stereo_camera/data/WSServer.h"
 #include "stereo_camera/data/SDKSlotManager.h"
 #include "stereo_camera/data/ConfigManager.h"
 #include <csignal>
@@ -69,6 +70,17 @@ int main(int argc, char* argv[]) {
     auto loopback_sub = std::make_shared<stereo_camera::LoopbackSubscriber>(
         loopback_buffer, cfg.api3.data.sub_endpoints);
 
+    const std::string& api3_cert = cfg.api3.admin_server.cert_path;
+    const std::string& api3_key = cfg.api3.admin_server.key_path;
+    std::string cert_path = api3_cert.empty() ? config_dir + "/server.crt" : api3_cert;
+    std::string key_path = api3_key.empty() ? config_dir + "/server.key" : api3_key;
+
+    stereo_camera::WSServer wss_server(
+        loopback_buffer,
+        cfg.api3.data.wss_server.host,
+        static_cast<uint16_t>(cfg.api3.data.wss_server.port),
+        cert_path, key_path);
+
     sdk_manager->set_data_callback([&publisher](const std::string& cam_id,
         const std::shared_ptr<stereo_camera::DataBundle>& bundle) {
         (void)cam_id;
@@ -77,11 +89,6 @@ int main(int argc, char* argv[]) {
 
     auto client_handler = std::make_shared<stereo_camera::ClientHandler>();
     client_handler->set_sdk_manager(sdk_manager);
-
-    const std::string& api3_cert = cfg.api3.admin_server.cert_path;
-    const std::string& api3_key = cfg.api3.admin_server.key_path;
-    std::string cert_path = api3_cert.empty() ? config_dir + "/server.crt" : api3_cert;
-    std::string key_path = api3_key.empty() ? config_dir + "/server.key" : api3_key;
 
     stereo_camera::AdminServer server(
         cfg.api3.admin_server.host,
@@ -101,6 +108,7 @@ int main(int argc, char* argv[]) {
 
     publisher->start();
     loopback_sub->start();
+    wss_server.start();
 
     stereo_camera::Logger::instance().info("Main", "StereoCamera node started");
     stereo_camera::Logger::instance().info("Main", std::string("API 3a HTTPS: ") + cfg.api3.admin_server.host + ":" + std::to_string(cfg.api3.admin_server.port));
@@ -111,11 +119,14 @@ int main(int argc, char* argv[]) {
         sdk_cfg.base_url);
     stereo_camera::Logger::instance().info("Main", "API 3b-1 LoopbackSubscriber: " +
         std::to_string(cfg.api3.data.sub_endpoints.size()) + " channels");
+    stereo_camera::Logger::instance().info("Main", std::string("API 3b-2 WSS: ") +
+        cfg.api3.data.wss_server.host + ":" + std::to_string(cfg.api3.data.wss_server.port));
 
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    wss_server.stop();
     loopback_sub->stop();
     publisher->stop();
     sdk_manager->stop_all();
