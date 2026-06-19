@@ -86,10 +86,19 @@ int main(int argc, char* argv[]) {
     server.set_parameter_manager(param_mgr);
     server.start();
 
+    stereo_camera::AdminServer api2_server(
+        cfg.api2.server.host,
+        static_cast<uint16_t>(cfg.api2.server.port),
+        cert_path, key_path);
+    api2_server.set_client_handler(client_handler);
+    api2_server.set_parameter_manager(param_mgr);
+    api2_server.start();
+
     publisher->start();
 
     stereo_camera::Logger::instance().info("Main", "StereoCamera node started");
     stereo_camera::Logger::instance().info("Main", std::string("API 3a HTTPS: ") + cfg.api3.admin_server.host + ":" + std::to_string(cfg.api3.admin_server.port));
+    stereo_camera::Logger::instance().info("Main", std::string("API 2a HTTPS: ") + cfg.api2.server.host + ":" + std::to_string(cfg.api2.server.port));
     stereo_camera::Logger::instance().info("Main", "API 2b PUB endpoints: " +
         std::to_string(cfg.api2.data.pub_endpoints.size()));
     stereo_camera::Logger::instance().info("Main", "API 1a Camera SDK: " +
@@ -102,6 +111,7 @@ int main(int argc, char* argv[]) {
     publisher->stop();
     sdk_manager->stop_all();
     config_mgr->sync();
+    api2_server.stop();
     server.stop();
     stereo_camera::Logger::instance().info("Main", "StereoCamera node stopped");
     return 0;
