@@ -108,18 +108,46 @@ struct AdminServer::Impl {
                 }
 
                 char buf[65536] = {};
-                int n = SSL_read(ssl, buf, sizeof(buf) - 1);
-                if (n > 0 && handler) {
-                    std::string raw(buf, n);
+                std::string raw;
+                bool got_headers = false;
+                size_t content_length = 0;
+                size_t header_end_pos = std::string::npos;
 
+                while (true) {
+                    int n = SSL_read(ssl, buf, sizeof(buf) - 1);
+                    if (n > 0) {
+                        raw.append(buf, n);
+                        if (!got_headers) {
+                            header_end_pos = raw.find("\r\n\r\n");
+                            if (header_end_pos != std::string::npos) {
+                                got_headers = true;
+                                std::string header_block = raw.substr(0, header_end_pos);
+                                auto cl_pos = header_block.find("Content-Length:");
+                                if (cl_pos == std::string::npos)
+                                    cl_pos = header_block.find("content-length:");
+                                if (cl_pos != std::string::npos) {
+                                    auto eol = header_block.find("\r\n", cl_pos);
+                                    content_length = std::stoul(header_block.substr(cl_pos + 15, eol - cl_pos - 15));
+                                }
+                            }
+                        }
+                        if (got_headers) {
+                            size_t body_len = raw.size() - header_end_pos - 4;
+                            if (body_len >= content_length) break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                if (!raw.empty() && handler) {
                     std::string method = "GET";
                     std::string path = "/";
                     std::string body;
 
-                    auto header_end = raw.find("\r\n\r\n");
-                    if (header_end != std::string::npos) {
-                        std::string header = raw.substr(0, header_end);
-                        body = raw.substr(header_end + 4);
+                    if (header_end_pos != std::string::npos) {
+                        std::string header = raw.substr(0, header_end_pos);
+                        body = raw.substr(header_end_pos + 4);
 
                         auto first_space = header.find(' ');
                         if (first_space != std::string::npos) {
