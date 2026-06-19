@@ -5,6 +5,7 @@
 #include "stereo_camera/common/Logger.h"
 #include "stereo_camera/data/DataBuffer.h"
 #include "stereo_camera/data/DataPublisher.h"
+#include "stereo_camera/data/LoopbackSubscriber.h"
 #include "stereo_camera/data/SDKSlotManager.h"
 #include "stereo_camera/data/ConfigManager.h"
 #include <csignal>
@@ -64,6 +65,10 @@ int main(int argc, char* argv[]) {
 
     auto publisher = std::make_shared<stereo_camera::DataPublisher>(buffer, cfg.api2.data.pub_endpoints);
 
+    auto loopback_buffer = std::make_shared<stereo_camera::DataBuffer>(buffer_depth);
+    auto loopback_sub = std::make_shared<stereo_camera::LoopbackSubscriber>(
+        loopback_buffer, cfg.api3.data.sub_endpoints);
+
     sdk_manager->set_data_callback([&publisher](const std::string& cam_id,
         const std::shared_ptr<stereo_camera::DataBundle>& bundle) {
         (void)cam_id;
@@ -95,6 +100,7 @@ int main(int argc, char* argv[]) {
     api2_server.start();
 
     publisher->start();
+    loopback_sub->start();
 
     stereo_camera::Logger::instance().info("Main", "StereoCamera node started");
     stereo_camera::Logger::instance().info("Main", std::string("API 3a HTTPS: ") + cfg.api3.admin_server.host + ":" + std::to_string(cfg.api3.admin_server.port));
@@ -103,11 +109,14 @@ int main(int argc, char* argv[]) {
         std::to_string(cfg.api2.data.pub_endpoints.size()));
     stereo_camera::Logger::instance().info("Main", "API 1a Camera SDK: " +
         sdk_cfg.base_url);
+    stereo_camera::Logger::instance().info("Main", "API 3b-1 LoopbackSubscriber: " +
+        std::to_string(cfg.api3.data.sub_endpoints.size()) + " channels");
 
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    loopback_sub->stop();
     publisher->stop();
     sdk_manager->stop_all();
     config_mgr->sync();
