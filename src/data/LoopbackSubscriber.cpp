@@ -7,16 +7,8 @@
 namespace stereo_camera {
 
 DataType LoopbackSubscriber::channel_to_type(const std::string& id) {
-    if (id == "stereo_image")   return DataType::StereoImage;
-    if (id == "depth_map")      return DataType::DepthMap;
-    if (id == "point_cloud")    return DataType::PointCloud;
-    if (id == "disparity_map")  return DataType::DisparityMap;
-    if (id == "confidence_map") return DataType::ConfidenceMap;
-    if (id == "imu")            return DataType::IMU;
-    if (id == "temperature")    return DataType::Temperature;
-    if (id == "magnetometer")   return DataType::Magnetometer;
-    if (id == "barometer")      return DataType::Barometer;
-    return DataType::IMU;
+    try { return nlohmann::json(id).get<DataType>(); }
+    catch (...) { return DataType::IMU; }
 }
 
 LoopbackSubscriber::LoopbackSubscriber(std::shared_ptr<DataBuffer> buffer,

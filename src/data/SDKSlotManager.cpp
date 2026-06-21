@@ -6,22 +6,18 @@
 
 namespace stereo_camera {
 static std::vector<std::string> types_to_channels(const std::vector<DataType>& types) {
-    std::vector<std::string> chans;
+    bool has_2d = false, has_3d = false, has_sensor = false;
     for (auto t : types) {
-        switch (t) {
-            case DataType::StereoImage:
-                chans.push_back("left_image");
-                chans.push_back("right_image");
-                break;
-            case DataType::DepthMap:      chans.push_back("depth_map"); break;
-            case DataType::PointCloud:    chans.push_back("point_cloud"); break;
-            case DataType::IMU:           chans.push_back("imu"); break;
-            case DataType::DisparityMap:  chans.push_back("disparity_map"); break;
-            case DataType::ConfidenceMap: chans.push_back("confidence_map"); break;
-            case DataType::Temperature:   chans.push_back("temperature"); break;
-            default: break;
+        switch (data_type_to_group(t)) {
+            case DataGroup::VisualGeometric2D: has_2d = true; break;
+            case DataGroup::VisualGeometric3D: has_3d = true; break;
+            case DataGroup::SensorTracking:    has_sensor = true; break;
         }
     }
+    std::vector<std::string> chans;
+    if (has_2d) chans.push_back("visual_2d");
+    if (has_3d) chans.push_back("visual_3d");
+    if (has_sensor) chans.push_back("sensor_data");
     return chans;
 }
 
