@@ -18,7 +18,7 @@ void DataPublisher::start() {
     zmq_ctx_ = zmq_ctx_new();
     for (auto& [channel, endpoint] : pub_endpoints_) {
         void* sock = zmq_socket(zmq_ctx_, ZMQ_PUB);
-        int sndhwm = 1;
+        int sndhwm = 2;
         zmq_setsockopt(sock, ZMQ_SNDHWM, &sndhwm, sizeof(sndhwm));
         int linger = 0;
         zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof(linger));
@@ -75,8 +75,8 @@ void DataPublisher::pub_loop() {
             if (it == zmq_sockets_.end()) continue;
 
             std::string topic = slot.camera_id + "/" + channel;
-            zmq_send(it->second, topic.c_str(), topic.size(), ZMQ_SNDMORE);
-            zmq_send(it->second, bundle->payload.data(), bundle->payload.size(), 0);
+            zmq_send(it->second, topic.c_str(), topic.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
+            zmq_send(it->second, bundle->payload.data(), bundle->payload.size(), ZMQ_DONTWAIT);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));

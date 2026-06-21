@@ -20,7 +20,7 @@ void LoopbackSubscriber::start() {
     zmq_ctx_ = zmq_ctx_new();
     for (auto& [channel, endpoint] : sub_endpoints_) {
         void* sock = zmq_socket(zmq_ctx_, ZMQ_SUB);
-        int rcvhwm = 2;
+        int rcvhwm = 1;
         zmq_setsockopt(sock, ZMQ_RCVHWM, &rcvhwm, sizeof(rcvhwm));
         int linger = 0;
         zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof(linger));
