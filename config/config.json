@@ -11,8 +11,8 @@
             "channels": {
                 "base": "ipc:///tmp/zed_vision",
                 "visual_2d": "ipc:///tmp/zed_vision_visual_2d",
-                "geometric_3d": "ipc:///tmp/zed_vision_geometric_3d",
-                "sensor_data": "ipc:///tmp/zed_vision_sensor_data"
+                "sensor_data": "ipc:///tmp/zed_vision_sensor_data",
+                "visual_3d": "ipc:///tmp/zed_vision_visual_3d"
             }
         }
     },

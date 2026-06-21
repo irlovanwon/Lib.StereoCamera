@@ -66,7 +66,6 @@ bool SDKSlotManager::start_capture(const std::string& camera_id, const std::vect
     if (!slot->capturing.load()) {
         std::vector<std::string> chan_names;
         for (const auto& cn : types_to_channels(types)) {
-            slot->client->activate_channel(cn);
             chan_names.push_back(cn);
         }
 
@@ -272,31 +271,16 @@ void SDKSlotManager::dealer_loop(const std::string& camera_id, std::unordered_ma
                 const std::string& grp = subs[i].group;
 
                 if (grp == "visual_2d") {
-                    std::vector<uint8_t> stereo_combined;
-                    bool has_stereo = false;
                     ChannelFrame frame_2d;
                     frame_2d.camera_id = camera_id;
-                    frame_2d.timestamp = Timestamp::now();
+                    frame_2d.timestamp = {hdr.value("ts_sec", 0), hdr.value("ts_nsec", 0)};
                     for (size_t j = 0; j < parts_arr.size() && j + 1 < zparts.size(); j++) {
                         std::string id = parts_arr[j].value("id", "");
-                        if (id == "left" || id == "right") {
-                            stereo_combined.insert(stereo_combined.end(), zparts[j+1].begin(), zparts[j+1].end());
-                            has_stereo = true;
-                        } else if (id == "depth") {
-                            auto b = std::make_shared<DataBundle>();
-                            b->type = DataType::DepthMap;
-                            b->payload = std::move(zparts[j+1]);
-                            b->timestamp = frame_2d.timestamp;
-                            buffer_->push(camera_id, b);
-                            frame_2d.bundles.push_back(b);
-                            if (data_callback_) data_callback_(camera_id, b);
-                        }
-                    }
-                    if (has_stereo) {
                         auto b = std::make_shared<DataBundle>();
-                        b->type = DataType::StereoImage;
-                        b->payload = std::move(stereo_combined);
+                        b->payload = std::move(zparts[j+1]);
                         b->timestamp = frame_2d.timestamp;
+                        try { b->type = nlohmann::json(id).get<DataType>(); }
+                        catch (...) { continue; }
                         buffer_->push(camera_id, b);
                         frame_2d.bundles.push_back(b);
                         if (data_callback_) data_callback_(camera_id, b);
@@ -308,57 +292,39 @@ void SDKSlotManager::dealer_loop(const std::string& camera_id, std::unordered_ma
                             pipeline_->total_dropped.fetch_add(1);
                         pipeline_->notify();
                     }
-                } else if (grp == "geometric_3d") {
-                    ChannelFrame frame_2d, frame_3d;
-                    frame_2d.camera_id = camera_id;
+                } else if (grp == "visual_3d") {
+                    ChannelFrame frame_3d;
                     frame_3d.camera_id = camera_id;
-                    auto ts = Timestamp::now();
-                    frame_2d.timestamp = ts;
-                    frame_3d.timestamp = ts;
+                    frame_3d.timestamp = {hdr.value("ts_sec", 0), hdr.value("ts_nsec", 0)};
                     for (size_t j = 0; j < parts_arr.size() && j + 1 < zparts.size(); j++) {
                         std::string id = parts_arr[j].value("id", "");
                         auto b = std::make_shared<DataBundle>();
                         b->payload = std::move(zparts[j+1]);
-                        b->timestamp = ts;
-                        if (id == "depth") b->type = DataType::DepthMap;
-                        else if (id == "point_cloud") b->type = DataType::PointCloud;
-                        else if (id == "disparity") b->type = DataType::DisparityMap;
-                        else if (id == "confidence") b->type = DataType::ConfidenceMap;
-                        else continue;
+                        b->timestamp = frame_3d.timestamp;
+                        try { b->type = nlohmann::json(id).get<DataType>(); }
+                        catch (...) { continue; }
                         buffer_->push(camera_id, b);
-                        if (b->type == DataType::DepthMap)
-                            frame_2d.bundles.push_back(b);
-                        else
-                            frame_3d.bundles.push_back(b);
+                        frame_3d.bundles.push_back(b);
                         if (data_callback_) data_callback_(camera_id, b);
                     }
-                    if (pipeline_) {
-                        if (!frame_2d.bundles.empty()) {
-                            if (pipeline_->queue_2d.try_push(std::move(frame_2d)))
-                                pipeline_->total_pushed.fetch_add(1);
-                            else
-                                pipeline_->total_dropped.fetch_add(1);
-                        }
-                        if (!frame_3d.bundles.empty()) {
-                            if (pipeline_->queue_3d.try_push(std::move(frame_3d)))
-                                pipeline_->total_pushed.fetch_add(1);
-                            else
-                                pipeline_->total_dropped.fetch_add(1);
-                        }
+                    if (pipeline_ && !frame_3d.bundles.empty()) {
+                        if (pipeline_->queue_3d.try_push(std::move(frame_3d)))
+                            pipeline_->total_pushed.fetch_add(1);
+                        else
+                            pipeline_->total_dropped.fetch_add(1);
                         pipeline_->notify();
                     }
                 } else if (grp == "sensor_data") {
                     ChannelFrame frame_s;
                     frame_s.camera_id = camera_id;
-                    frame_s.timestamp = Timestamp::now();
+                    frame_s.timestamp = {hdr.value("ts_sec", 0), hdr.value("ts_nsec", 0)};
                     for (size_t j = 0; j < parts_arr.size() && j + 1 < zparts.size(); j++) {
                         std::string id = parts_arr[j].value("id", "");
                         auto b = std::make_shared<DataBundle>();
                         b->payload = std::move(zparts[j+1]);
                         b->timestamp = frame_s.timestamp;
-                        if (id == "imu") b->type = DataType::IMU;
-                        else if (id == "temperature") b->type = DataType::Temperature;
-                        else continue;
+                        try { b->type = nlohmann::json(id).get<DataType>(); }
+                        catch (...) { continue; }
                         buffer_->push(camera_id, b);
                         frame_s.bundles.push_back(b);
                         if (data_callback_) data_callback_(camera_id, b);
@@ -383,16 +349,8 @@ void SDKSlotManager::dealer_loop(const std::string& camera_id, std::unordered_ma
 }
 
 DataType SDKSlotManager::channel_to_datatype(const std::string& channel) {
-    if (channel == "left_image" || channel == "right_image" || channel == "stereo_image") return DataType::StereoImage;
-    if (channel == "depth_map") return DataType::DepthMap;
-    if (channel == "point_cloud") return DataType::PointCloud;
-    if (channel == "imu") return DataType::IMU;
-    if (channel == "disparity_map") return DataType::DisparityMap;
-    if (channel == "confidence_map") return DataType::ConfidenceMap;
-    if (channel == "temperature") return DataType::Temperature;
-    if (channel == "magnetometer") return DataType::Magnetometer;
-    if (channel == "barometer") return DataType::Barometer;
-    return DataType::StereoImage;
+    try { return nlohmann::json(channel).get<DataType>(); }
+    catch (...) { return DataType::StereoImage; }
 }
 
 bool SDKSlotManager::capturing_active(const std::string& camera_id) const {

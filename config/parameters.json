@@ -2,21 +2,7 @@
     {
         "is_available": true,
         "is_readonly": false,
-        "name": "auto_gain",
-        "type": "integer",
-        "value": 0
-    },
-    {
-        "is_available": true,
-        "is_readonly": false,
-        "name": "auto_exposure",
-        "type": "integer",
-        "value": 0
-    },
-    {
-        "is_available": true,
-        "is_readonly": false,
-        "name": "gain",
+        "name": "fps",
         "type": "integer",
         "value": 0
     },
@@ -30,7 +16,21 @@
     {
         "is_available": true,
         "is_readonly": false,
-        "name": "fps",
+        "name": "gain",
+        "type": "integer",
+        "value": 0
+    },
+    {
+        "is_available": true,
+        "is_readonly": false,
+        "name": "auto_exposure",
+        "type": "integer",
+        "value": 0
+    },
+    {
+        "is_available": true,
+        "is_readonly": false,
+        "name": "auto_gain",
         "type": "integer",
         "value": 0
     }
