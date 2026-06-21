@@ -1,0 +1,27 @@
+[2026-06-21 03:27:07] [INFO] [ConfigManager] Loaded config.json
+[2026-06-21 03:27:07] [INFO] [ConfigManager] Loaded config: ./config/parameters.json
+[2026-06-21 03:27:07] [INFO] [SDKSlotManager] Configured SDK: cam1 -> https://127.0.0.1:8443
+[2026-06-21 03:27:07] [ERROR] [AdminServer] Failed to bind
+[2026-06-21 03:27:07] [ERROR] [AdminServer] Failed to bind
+[2026-06-21 03:27:07] [INFO] [DataPublisher] PUB bound: stereo_image -> ipc:///tmp/sc_pub_stereo_image
+[2026-06-21 03:27:07] [INFO] [DataPublisher] PUB bound: magnetometer -> ipc:///tmp/sc_pub_magnetometer
+[2026-06-21 03:27:07] [INFO] [DataPublisher] PUB bound: point_cloud -> ipc:///tmp/sc_pub_point_cloud
+[2026-06-21 03:27:07] [INFO] [DataPublisher] PUB bound: imu -> ipc:///tmp/sc_pub_imu
+[2026-06-21 03:27:07] [INFO] [DataPublisher] PUB bound: depth_map -> ipc:///tmp/sc_pub_depth_map
+[2026-06-21 03:27:07] [INFO] [DataPublisher] PUB bound: barometer -> ipc:///tmp/sc_pub_barometer
+[2026-06-21 03:27:07] [INFO] [DataPublisher] Pub loop started
+[2026-06-21 03:27:07] [INFO] [LoopbackSubscriber] SUB connected: stereo_image -> ipc:///tmp/sc_pub_stereo_image
+[2026-06-21 03:27:07] [INFO] [LoopbackSubscriber] SUB connected: magnetometer -> ipc:///tmp/sc_pub_magnetometer
+[2026-06-21 03:27:07] [INFO] [LoopbackSubscriber] SUB connected: point_cloud -> ipc:///tmp/sc_pub_point_cloud
+[2026-06-21 03:27:07] [INFO] [LoopbackSubscriber] SUB connected: imu -> ipc:///tmp/sc_pub_imu
+[2026-06-21 03:27:07] [INFO] [LoopbackSubscriber] SUB connected: depth_map -> ipc:///tmp/sc_pub_depth_map
+[2026-06-21 03:27:07] [INFO] [LoopbackSubscriber] SUB connected: barometer -> ipc:///tmp/sc_pub_barometer
+[2026-06-21 03:27:07] [INFO] [LoopbackSubscriber] Sub loop started
+[2026-06-21 03:27:07] [ERROR] [WSServer] Bind failed: Address already in use
+[2026-06-21 03:27:07] [INFO] [Main] StereoCamera node started
+[2026-06-21 03:27:07] [INFO] [Main] API 3a HTTPS: 127.0.0.1:9443
+[2026-06-21 03:27:07] [INFO] [Main] API 2a HTTPS: 0.0.0.0:8444
+[2026-06-21 03:27:07] [INFO] [Main] API 2b PUB endpoints: 6
+[2026-06-21 03:27:07] [INFO] [Main] API 1a Camera SDK: https://127.0.0.1:8443
+[2026-06-21 03:27:07] [INFO] [Main] API 3b-1 LoopbackSubscriber: 6 channels
+[2026-06-21 03:27:07] [INFO] [Main] API 3b-2 WSS: 127.0.0.1:9444

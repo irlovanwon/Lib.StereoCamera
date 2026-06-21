@@ -2,6 +2,7 @@
 #include "stereo_camera/common/Logger.h"
 #include <zmq.h>
 #include <cstring>
+#include <nlohmann/json.hpp>
 
 namespace stereo_camera {
 static std::vector<std::string> types_to_channels(const std::vector<DataType>& types) {
@@ -65,10 +66,8 @@ bool SDKSlotManager::start_capture(const std::string& camera_id, const std::vect
     if (!slot->capturing.load()) {
         std::vector<std::string> chan_names;
         for (const auto& cn : types_to_channels(types)) {
-            if (slot->channels.count(cn)) {
-                slot->client->activate_channel(cn);
-                chan_names.push_back(cn);
-            }
+            slot->client->activate_channel(cn);
+            chan_names.push_back(cn);
         }
 
         auto resp = slot->client->start_capture_by_channels(chan_names);
@@ -181,9 +180,10 @@ void SDKSlotManager::set_data_callback(DataReceivedCallback callback) {
 }
 
 void SDKSlotManager::dealer_loop(const std::string& camera_id, std::unordered_map<std::string, std::string> channels) {
-    void* context = zmq_ctx_new();
+    void* context = shared_zmq_ctx_ ? shared_zmq_ctx_ : zmq_ctx_new();
+    bool owns_ctx = (shared_zmq_ctx_ == nullptr);
 
-    struct SubEntry { std::string channel; void* sock; };
+    struct SubEntry { std::string group; void* sock; };
     std::vector<SubEntry> subs;
 
     for (const auto& [ch, ep] : channels) {
@@ -192,6 +192,8 @@ void SDKSlotManager::dealer_loop(const std::string& camera_id, std::unordered_ma
         zmq_setsockopt(s, ZMQ_RCVTIMEO, &timeout_ms, sizeof(timeout_ms));
         int linger_val = 0;
         zmq_setsockopt(s, ZMQ_LINGER, &linger_val, sizeof(linger_val));
+        int rcvhwm = 2;
+        zmq_setsockopt(s, ZMQ_RCVHWM, &rcvhwm, sizeof(rcvhwm));
         if (zmq_connect(s, ep.c_str()) != 0) {
             Logger::instance().error("SDKSlotManager", "ZMQ connect failed for " + camera_id + "/" + ch + ": " + zmq_strerror(zmq_errno()));
             zmq_close(s);
@@ -203,7 +205,7 @@ void SDKSlotManager::dealer_loop(const std::string& camera_id, std::unordered_ma
     }
 
     if (subs.empty()) {
-        zmq_ctx_destroy(context);
+        if (owns_ctx) zmq_ctx_destroy(context);
         Logger::instance().warn("SDKSlotManager", "Dealer loop: no channels for " + camera_id);
         return;
     }
@@ -223,45 +225,139 @@ void SDKSlotManager::dealer_loop(const std::string& camera_id, std::unordered_ma
         for (size_t i = 0; i < items.size(); ++i) {
             if (!(items[i].revents & ZMQ_POLLIN)) continue;
 
-            zmq_msg_t hdr;
-            zmq_msg_t body;
-            zmq_msg_init(&hdr);
-            zmq_msg_init(&body);
-            zmq_msg_recv(&hdr, subs[i].sock, 0);
+            std::vector<std::vector<uint8_t>> zparts;
+            while (true) {
+                zmq_msg_t msg;
+                zmq_msg_init(&msg);
+                int r2 = zmq_msg_recv(&msg, subs[i].sock, 0);
+                if (r2 < 0) { zmq_msg_close(&msg); break; }
+                size_t sz = zmq_msg_size(&msg);
+                auto* d = static_cast<const uint8_t*>(zmq_msg_data(&msg));
+                zparts.emplace_back(d, d + sz);
+                zmq_msg_close(&msg);
 
-            int64_t more = 0;
-            size_t more_sz = sizeof(more);
-            zmq_getsockopt(subs[i].sock, ZMQ_RCVMORE, &more, &more_sz);
-            if (more) {
-                zmq_msg_recv(&body, subs[i].sock, 0);
+                int64_t more = 0;
+                size_t more_sz = sizeof(more);
+                zmq_getsockopt(subs[i].sock, ZMQ_RCVMORE, &more, &more_sz);
+                if (!more) break;
             }
+            if (zparts.empty()) continue;
 
-            auto bundle = std::make_shared<DataBundle>();
-            bundle->type = channel_to_datatype(subs[i].channel);
+            try {
+                std::string hdr_str(zparts[0].begin(), zparts[0].end());
+                auto hdr = nlohmann::json::parse(hdr_str);
+                if (!hdr.value("active", true)) continue;
+                auto& parts_arr = hdr["parts"];
+                const std::string& grp = subs[i].group;
 
-            if (more) {
-                size_t bsz = zmq_msg_size(&body);
-                const uint8_t* d = static_cast<const uint8_t*>(zmq_msg_data(&body));
-                bundle->payload.assign(d, d + bsz);
-            } else {
-                size_t hsz = zmq_msg_size(&hdr);
-                const uint8_t* d = static_cast<const uint8_t*>(zmq_msg_data(&hdr));
-                bundle->payload.assign(d, d + hsz);
+                if (grp == "visual_2d") {
+                    std::vector<uint8_t> stereo_combined;
+                    bool has_stereo = false;
+                    ChannelFrame frame_2d;
+                    frame_2d.camera_id = camera_id;
+                    frame_2d.timestamp = Timestamp::now();
+                    for (size_t j = 0; j < parts_arr.size() && j + 1 < zparts.size(); j++) {
+                        std::string id = parts_arr[j].value("id", "");
+                        if (id == "left" || id == "right") {
+                            stereo_combined.insert(stereo_combined.end(), zparts[j+1].begin(), zparts[j+1].end());
+                            has_stereo = true;
+                        } else if (id == "depth") {
+                            auto b = std::make_shared<DataBundle>();
+                            b->type = DataType::DepthMap;
+                            b->payload = std::move(zparts[j+1]);
+                            b->timestamp = frame_2d.timestamp;
+                            buffer_->push(camera_id, b);
+                            frame_2d.bundles.push_back(b);
+                            if (data_callback_) data_callback_(camera_id, b);
+                        }
+                    }
+                    if (has_stereo) {
+                        auto b = std::make_shared<DataBundle>();
+                        b->type = DataType::StereoImage;
+                        b->payload = std::move(stereo_combined);
+                        b->timestamp = frame_2d.timestamp;
+                        buffer_->push(camera_id, b);
+                        frame_2d.bundles.push_back(b);
+                        if (data_callback_) data_callback_(camera_id, b);
+                    }
+                    if (pipeline_ && !frame_2d.bundles.empty()) {
+                        if (pipeline_->queue_2d.try_push(std::move(frame_2d)))
+                            pipeline_->total_pushed.fetch_add(1);
+                        else
+                            pipeline_->total_dropped.fetch_add(1);
+                        pipeline_->notify();
+                    }
+                } else if (grp == "geometric_3d") {
+                    ChannelFrame frame_2d, frame_3d;
+                    frame_2d.camera_id = camera_id;
+                    frame_3d.camera_id = camera_id;
+                    auto ts = Timestamp::now();
+                    frame_2d.timestamp = ts;
+                    frame_3d.timestamp = ts;
+                    for (size_t j = 0; j < parts_arr.size() && j + 1 < zparts.size(); j++) {
+                        std::string id = parts_arr[j].value("id", "");
+                        auto b = std::make_shared<DataBundle>();
+                        b->payload = std::move(zparts[j+1]);
+                        b->timestamp = ts;
+                        if (id == "depth") b->type = DataType::DepthMap;
+                        else if (id == "point_cloud") b->type = DataType::PointCloud;
+                        else if (id == "disparity") b->type = DataType::DisparityMap;
+                        else if (id == "confidence") b->type = DataType::ConfidenceMap;
+                        else continue;
+                        buffer_->push(camera_id, b);
+                        if (b->type == DataType::DepthMap)
+                            frame_2d.bundles.push_back(b);
+                        else
+                            frame_3d.bundles.push_back(b);
+                        if (data_callback_) data_callback_(camera_id, b);
+                    }
+                    if (pipeline_) {
+                        if (!frame_2d.bundles.empty()) {
+                            if (pipeline_->queue_2d.try_push(std::move(frame_2d)))
+                                pipeline_->total_pushed.fetch_add(1);
+                            else
+                                pipeline_->total_dropped.fetch_add(1);
+                        }
+                        if (!frame_3d.bundles.empty()) {
+                            if (pipeline_->queue_3d.try_push(std::move(frame_3d)))
+                                pipeline_->total_pushed.fetch_add(1);
+                            else
+                                pipeline_->total_dropped.fetch_add(1);
+                        }
+                        pipeline_->notify();
+                    }
+                } else if (grp == "sensor_data") {
+                    ChannelFrame frame_s;
+                    frame_s.camera_id = camera_id;
+                    frame_s.timestamp = Timestamp::now();
+                    for (size_t j = 0; j < parts_arr.size() && j + 1 < zparts.size(); j++) {
+                        std::string id = parts_arr[j].value("id", "");
+                        auto b = std::make_shared<DataBundle>();
+                        b->payload = std::move(zparts[j+1]);
+                        b->timestamp = frame_s.timestamp;
+                        if (id == "imu") b->type = DataType::IMU;
+                        else if (id == "temperature") b->type = DataType::Temperature;
+                        else continue;
+                        buffer_->push(camera_id, b);
+                        frame_s.bundles.push_back(b);
+                        if (data_callback_) data_callback_(camera_id, b);
+                    }
+                    if (pipeline_ && !frame_s.bundles.empty()) {
+                        if (pipeline_->queue_sensor.try_push(std::move(frame_s)))
+                            pipeline_->total_pushed.fetch_add(1);
+                        else
+                            pipeline_->total_dropped.fetch_add(1);
+                        pipeline_->notify();
+                    }
+                }
+            } catch (const std::exception& e) {
+                Logger::instance().warn("SDKSlotManager", std::string("Parse error: ") + e.what());
             }
-            bundle->timestamp = Timestamp::now();
-
-            buffer_->push(camera_id, bundle);
-            if (data_callback_) {
-                data_callback_(camera_id, bundle);
-            }
-
-            zmq_msg_close(&hdr);
-            zmq_msg_close(&body);
         }
     }
 
     for (auto& su : subs) zmq_close(su.sock);
-    zmq_ctx_destroy(context);
+    if (owns_ctx) zmq_ctx_destroy(context);
     Logger::instance().info("SDKSlotManager", "Dealer loop exited: " + camera_id);
 }
 

@@ -1,0 +1,45 @@
+[2026-06-21 03:30:37] [INFO] [ConfigManager] Loaded config.json
+[2026-06-21 03:30:37] [INFO] [ConfigManager] Loaded config: ./config/parameters.json
+[2026-06-21 03:30:37] [INFO] [SDKSlotManager] Configured SDK: cam1 -> https://127.0.0.1:8443
+[2026-06-21 03:30:37] [INFO] [AdminServer] Listening on 127.0.0.1:9443
+[2026-06-21 03:30:37] [INFO] [AdminServer] Listening on 0.0.0.0:8444
+[2026-06-21 03:30:37] [INFO] [DataPublisher] PUB bound: stereo_image -> ipc:///tmp/sc_pub_stereo_image
+[2026-06-21 03:30:37] [INFO] [DataPublisher] PUB bound: magnetometer -> ipc:///tmp/sc_pub_magnetometer
+[2026-06-21 03:30:37] [INFO] [DataPublisher] PUB bound: point_cloud -> ipc:///tmp/sc_pub_point_cloud
+[2026-06-21 03:30:37] [INFO] [DataPublisher] PUB bound: imu -> ipc:///tmp/sc_pub_imu
+[2026-06-21 03:30:37] [INFO] [DataPublisher] PUB bound: depth_map -> ipc:///tmp/sc_pub_depth_map
+[2026-06-21 03:30:37] [INFO] [DataPublisher] PUB bound: barometer -> ipc:///tmp/sc_pub_barometer
+[2026-06-21 03:30:37] [INFO] [DataPublisher] Pub loop started
+[2026-06-21 03:30:37] [INFO] [LoopbackSubscriber] SUB connected: stereo_image -> ipc:///tmp/sc_pub_stereo_image
+[2026-06-21 03:30:37] [INFO] [LoopbackSubscriber] SUB connected: magnetometer -> ipc:///tmp/sc_pub_magnetometer
+[2026-06-21 03:30:37] [INFO] [LoopbackSubscriber] SUB connected: point_cloud -> ipc:///tmp/sc_pub_point_cloud
+[2026-06-21 03:30:37] [INFO] [LoopbackSubscriber] SUB connected: imu -> ipc:///tmp/sc_pub_imu
+[2026-06-21 03:30:37] [INFO] [LoopbackSubscriber] SUB connected: depth_map -> ipc:///tmp/sc_pub_depth_map
+[2026-06-21 03:30:37] [INFO] [LoopbackSubscriber] SUB connected: barometer -> ipc:///tmp/sc_pub_barometer
+[2026-06-21 03:30:37] [INFO] [LoopbackSubscriber] Sub loop started
+[2026-06-21 03:30:37] [INFO] [WSServer] Listening on 127.0.0.1:9444
+[2026-06-21 03:30:37] [INFO] [WSServer] Broadcast loop started
+[2026-06-21 03:30:37] [INFO] [Main] StereoCamera node started
+[2026-06-21 03:30:37] [INFO] [Main] API 3a HTTPS: 127.0.0.1:9443
+[2026-06-21 03:30:37] [INFO] [Main] API 2a HTTPS: 0.0.0.0:8444
+[2026-06-21 03:30:37] [INFO] [Main] API 2b PUB endpoints: 6
+[2026-06-21 03:30:37] [INFO] [Main] API 1a Camera SDK: https://127.0.0.1:8443
+[2026-06-21 03:30:37] [INFO] [Main] API 3b-1 LoopbackSubscriber: 6 channels
+[2026-06-21 03:30:37] [INFO] [Main] API 3b-2 WSS: 127.0.0.1:9444
+[2026-06-21 03:30:42] [INFO] [CameraSDKClient] Sending Init
+[2026-06-21 03:30:42] [INFO] [CameraSDKClient] Sending Connect
+[2026-06-21 03:30:42] [INFO] [SDKSlotManager] Connected: cam1
+[2026-06-21 03:30:42] [INFO] [ClientHandler] Init: module initialized by default
+[2026-06-21 03:30:44] [INFO] [ClientHandler] Connect: default
+[2026-06-21 03:30:47] [INFO] [CameraSDKClient] Sending StartCapture (channels)
+[2026-06-21 03:30:47] [WARN] [SDKSlotManager] SDK StartCapture returned 1 for cam1, continuing with dealer thread
+[2026-06-21 03:30:47] [INFO] [SDKSlotManager] Dealer thread started for cam1
+[2026-06-21 03:30:47] [INFO] [SDKSlotManager] Capture started for cam1 subscribers=1
+[2026-06-21 03:30:47] [INFO] [ClientHandler] StartCapture: default
+[2026-06-21 03:30:47] [INFO] [SDKSlotManager] SUB connected: cam1/geometric_3d -> ipc:///tmp/zed_vision_geometric_3d
+[2026-06-21 03:30:47] [INFO] [SDKSlotManager] SUB connected: cam1/sensor_data -> ipc:///tmp/zed_vision_sensor_data
+[2026-06-21 03:30:47] [INFO] [SDKSlotManager] SUB connected: cam1/visual_2d -> ipc:///tmp/zed_vision_visual_2d
+[2026-06-21 03:31:29] [INFO] [ClientHandler] Init: already initialized, returning success for test
+[2026-06-21 03:31:29] [INFO] [ClientHandler] Connect: test
+[2026-06-21 03:31:29] [INFO] [SDKSlotManager] Capture started for cam1 subscribers=2
+[2026-06-21 03:31:29] [INFO] [ClientHandler] StartCapture: test

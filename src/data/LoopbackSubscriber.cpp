@@ -1,149 +1,121 @@
 #include "stereo_camera/data/LoopbackSubscriber.h"
 #include "stereo_camera/common/Logger.h"
+#include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstring>
 
 namespace stereo_camera {
 
-LoopbackSubscriber::LoopbackSubscriber(
-    std::shared_ptr<DataBuffer> buffer,
-    const std::unordered_map<std::string, std::string>& sub_endpoints)
-    : buffer_(std::move(buffer)), sub_endpoints_(sub_endpoints) {}
-
-LoopbackSubscriber::~LoopbackSubscriber() {
-    stop();
+DataType LoopbackSubscriber::channel_to_type(const std::string& id) {
+    if (id == "stereo_image")   return DataType::StereoImage;
+    if (id == "depth_map")      return DataType::DepthMap;
+    if (id == "point_cloud")    return DataType::PointCloud;
+    if (id == "disparity_map")  return DataType::DisparityMap;
+    if (id == "confidence_map") return DataType::ConfidenceMap;
+    if (id == "imu")            return DataType::IMU;
+    if (id == "temperature")    return DataType::Temperature;
+    if (id == "magnetometer")   return DataType::Magnetometer;
+    if (id == "barometer")      return DataType::Barometer;
+    return DataType::IMU;
 }
+
+LoopbackSubscriber::LoopbackSubscriber(std::shared_ptr<DataBuffer> buffer,
+                                       const std::unordered_map<std::string, std::string>& sub_endpoints,
+                                       int zmq_hwm)
+    : buffer_(std::move(buffer)), sub_endpoints_(sub_endpoints), zmq_hwm_(zmq_hwm) {}
+
+LoopbackSubscriber::~LoopbackSubscriber() { stop(); }
 
 void LoopbackSubscriber::start() {
     if (running_.load()) return;
+    if (shared_ctx_) { zmq_ctx_ = shared_ctx_; owns_ctx_ = false; }
+    else { zmq_ctx_ = zmq_ctx_new(); owns_ctx_ = true; }
 
-    zmq_ctx_ = zmq_ctx_new();
     for (auto& [channel, endpoint] : sub_endpoints_) {
         void* sock = zmq_socket(zmq_ctx_, ZMQ_SUB);
-        int rcvhwm = 1;
-        zmq_setsockopt(sock, ZMQ_RCVHWM, &rcvhwm, sizeof(rcvhwm));
+        int hwm = zmq_hwm_;
+        zmq_setsockopt(sock, ZMQ_RCVHWM, &hwm, sizeof(hwm));
         int linger = 0;
         zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof(linger));
-
+        zmq_connect(sock, endpoint.c_str());
         zmq_setsockopt(sock, ZMQ_SUBSCRIBE, "", 0);
-
-        int rc = zmq_connect(sock, endpoint.c_str());
-        if (rc != 0) {
-            Logger::instance().error("LoopbackSubscriber",
-                "ZMQ connect failed for " + channel + ": " + zmq_strerror(zmq_errno()));
-            zmq_close(sock);
-            continue;
-        }
         zmq_sockets_.push_back(sock);
         Logger::instance().info("LoopbackSubscriber",
-            "SUB connected: " + channel + " -> " + endpoint);
+            "SUB connected: " + channel + " -> " + endpoint + " (HWM=" + std::to_string(zmq_hwm_) + ")");
     }
-
-    if (zmq_sockets_.empty()) {
-        Logger::instance().warn("LoopbackSubscriber", "No sockets connected, not starting");
-        zmq_ctx_destroy(zmq_ctx_);
-        zmq_ctx_ = nullptr;
-        return;
-    }
-
     running_.store(true);
     thread_ = std::make_unique<std::thread>(&LoopbackSubscriber::sub_loop, this);
 }
 
 void LoopbackSubscriber::stop() {
     running_.store(false);
-    if (thread_ && thread_->joinable()) {
-        thread_->join();
-    }
-    for (void* sock : zmq_sockets_) {
-        zmq_close(sock);
-    }
+    if (thread_ && thread_->joinable()) thread_->join();
+    for (auto* sock : zmq_sockets_) zmq_close(sock);
     zmq_sockets_.clear();
-    if (zmq_ctx_) {
-        zmq_ctx_destroy(zmq_ctx_);
-        zmq_ctx_ = nullptr;
-    }
+    if (zmq_ctx_ && owns_ctx_) zmq_ctx_destroy(zmq_ctx_);
+    zmq_ctx_ = nullptr;
     Logger::instance().info("LoopbackSubscriber", "Stopped");
 }
 
-bool LoopbackSubscriber::is_running() const {
-    return running_.load();
-}
+bool LoopbackSubscriber::is_running() const { return running_.load(); }
 
 void LoopbackSubscriber::sub_loop() {
-    Logger::instance().info("LoopbackSubscriber", "Sub loop started");
-
-    uint64_t frame_count = 0;
+    Logger::instance().info("LoopbackSubscriber", "Sub loop started (grouped channels)");
 
     while (running_.load()) {
-        std::vector<zmq_pollitem_t> items;
-        items.reserve(zmq_sockets_.size());
-        for (size_t i = 0; i < zmq_sockets_.size(); ++i) {
-            zmq_pollitem_t item;
-            item.socket = zmq_sockets_[i];
-            item.events = ZMQ_POLLIN;
-            item.revents = 0;
-            items.push_back(item);
-        }
+        for (size_t i = 0; i < zmq_sockets_.size(); i++) {
+            zmq_pollitem_t poll;
+            poll.socket = zmq_sockets_[i];
+            poll.events = ZMQ_POLLIN;
+            int rc = zmq_poll(&poll, 1, 100);
+            if (rc <= 0 || !(poll.revents & ZMQ_POLLIN)) continue;
 
-        int rc = zmq_poll(items.data(), static_cast<int>(items.size()), 100);
-        if (rc <= 0) continue;
+            std::vector<std::vector<uint8_t>> zparts;
+            while (true) {
+                zmq_msg_t msg;
+                zmq_msg_init(&msg);
+                if (zmq_msg_recv(&msg, zmq_sockets_[i], ZMQ_DONTWAIT) < 0) {
+                    zmq_msg_close(&msg);
+                    break;
+                }
+                uint8_t* d = static_cast<uint8_t*>(zmq_msg_data(&msg));
+                size_t s = zmq_msg_size(&msg);
+                zparts.emplace_back(d, d + s);
+                zmq_msg_close(&msg);
 
-        for (size_t i = 0; i < items.size(); ++i) {
-            if (!(items[i].revents & ZMQ_POLLIN)) continue;
-
-            zmq_msg_t topic_msg;
-            zmq_msg_t payload_msg;
-            zmq_msg_init(&topic_msg);
-            zmq_msg_init(&payload_msg);
-
-            zmq_msg_recv(&topic_msg, zmq_sockets_[i], 0);
-            zmq_msg_recv(&payload_msg, zmq_sockets_[i], 0);
-
-            char* topic_data = static_cast<char*>(zmq_msg_data(&topic_msg));
-            size_t topic_len = zmq_msg_size(&topic_msg);
-
-            std::string topic(topic_data, topic_len);
-
-            size_t slash = topic.find('/');
-            std::string camera_id = (slash != std::string::npos) ? topic.substr(0, slash) : "default";
-            std::string channel = (slash != std::string::npos) ? topic.substr(slash + 1) : topic;
-
-            DataType dt = channel_to_type(channel);
-
-            auto bundle = std::make_shared<DataBundle>();
-            bundle->timestamp = Timestamp::now();
-            bundle->type = dt;
-            bundle->payload.resize(zmq_msg_size(&payload_msg));
-            std::memcpy(bundle->payload.data(), zmq_msg_data(&payload_msg), zmq_msg_size(&payload_msg));
-
-            buffer_->push(camera_id, bundle);
-
-            frame_count++;
-            if (frame_count % 100 == 0) {
-                Logger::instance().info("LoopbackSubscriber",
-                    "Received " + std::to_string(frame_count) + " frames total");
+                int more = 0;
+                size_t more_sz = sizeof(more);
+                zmq_getsockopt(zmq_sockets_[i], ZMQ_RCVMORE, &more, &more_sz);
+                if (!more) break;
             }
+            if (zparts.size() < 2) continue;
 
-            zmq_msg_close(&topic_msg);
-            zmq_msg_close(&payload_msg);
+            try {
+                // zparts[0] = topic, zparts[1] = JSON header, zparts[2..] = payloads
+                std::string hdr_str(zparts[1].begin(), zparts[1].end());
+                auto hdr = nlohmann::json::parse(hdr_str);
+                auto& parts_arr = hdr["parts"];
+                Timestamp ts;
+                ts.sec = hdr.value("ts_sec", (int64_t)0);
+                ts.nsec = hdr.value("ts_nsec", (int64_t)0);
+
+                for (size_t j = 0; j < parts_arr.size() && j + 2 < zparts.size(); j++) {
+                    std::string id = parts_arr[j].value("id", "");
+                    auto b = std::make_shared<DataBundle>();
+                    b->type = channel_to_type(id);
+                    b->payload = zparts[j + 2];
+                    b->timestamp = ts;
+                    buffer_->push(hdr.value("camera_id", "default"), b);
+                }
+                total_frames_.fetch_add(1);
+                if (total_frames_.load() % 1000 == 0) {
+                    Logger::instance().info("LoopbackSubscriber",
+                        "Received " + std::to_string(total_frames_.load()) + " group frames total");
+                }
+            } catch (...) {}
         }
     }
-
     Logger::instance().info("LoopbackSubscriber", "Sub loop exited");
-}
-
-DataType LoopbackSubscriber::channel_to_type(const std::string& channel) {
-    if (channel == "stereo_image")   return DataType::StereoImage;
-    if (channel == "depth_map")      return DataType::DepthMap;
-    if (channel == "point_cloud")    return DataType::PointCloud;
-    if (channel == "imu")            return DataType::IMU;
-    if (channel == "disparity_map")  return DataType::DisparityMap;
-    if (channel == "confidence_map") return DataType::ConfidenceMap;
-    if (channel == "temperature")    return DataType::Temperature;
-    if (channel == "magnetometer")   return DataType::Magnetometer;
-    if (channel == "barometer")      return DataType::Barometer;
-    return DataType::StereoImage;
 }
 
 } // namespace stereo_camera

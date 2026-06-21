@@ -311,12 +311,15 @@ void WSServer::broadcast_loop() {
             if (!bundle || bundle->payload.empty()) continue;
 
             if (slot.type == DataType::StereoImage) {
-                std::lock_guard<std::mutex> lk(encode_mutex_);
-                while (encode_queue_.size() >= ENCODE_QUEUE_MAX) {
-                    encode_queue_.pop_front();
+                {
+                    std::lock_guard<std::mutex> lk(encode_mutex_);
+                    if (encode_queue_.size() >= ENCODE_QUEUE_MAX) {
+                        // Drop-NEWEST: reject incoming frame
+                    } else {
+                        encode_queue_.push_back({slot.camera_id, slot.type, bundle});
+                        encode_cv_.notify_one();
+                    }
                 }
-                encode_queue_.push_back({slot.camera_id, slot.type, bundle});
-                encode_cv_.notify_one();
             } else {
                 send_to_subscribers(slot.camera_id, slot.type, bundle);
             }

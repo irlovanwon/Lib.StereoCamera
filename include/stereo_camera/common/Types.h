@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <memory>
 #include <chrono>
 #include <nlohmann/json.hpp>
 
@@ -92,5 +93,41 @@ inline std::string data_type_to_channel(DataType dt) {
     }
     return "unknown";
 }
+
+
+enum class DataGroup : uint8_t {
+    VisualGeometric2D = 0,
+    VisualGeometric3D = 1,
+    SensorTracking    = 2,
+};
+
+inline DataGroup data_type_to_group(DataType dt) {
+    switch (dt) {
+        case DataType::StereoImage:
+        case DataType::DepthMap:
+            return DataGroup::VisualGeometric2D;
+        case DataType::PointCloud:
+        case DataType::DisparityMap:
+        case DataType::ConfidenceMap:
+            return DataGroup::VisualGeometric3D;
+        default:
+            return DataGroup::SensorTracking;
+    }
+}
+
+inline std::string data_group_to_channel(DataGroup g) {
+    switch (g) {
+        case DataGroup::VisualGeometric2D: return "visual_geometric_2d";
+        case DataGroup::VisualGeometric3D: return "visual_geometric_3d";
+        case DataGroup::SensorTracking:    return "sensor_tracking";
+    }
+    return "unknown";
+}
+
+struct ChannelFrame {
+    std::string camera_id;
+    Timestamp timestamp;
+    std::vector<std::shared_ptr<DataBundle>> bundles;
+};
 
 } // namespace stereo_camera

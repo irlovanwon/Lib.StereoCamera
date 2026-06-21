@@ -3,6 +3,7 @@
 #include "stereo_camera/common/Types.h"
 #include "stereo_camera/api/CameraSDKClient.h"
 #include "stereo_camera/data/DataBuffer.h"
+#include "stereo_camera/data/DataPipeline.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -50,6 +51,8 @@ public:
 
     using DataReceivedCallback = std::function<void(const std::string& camera_id, const std::shared_ptr<DataBundle>&)>;
     void set_data_callback(DataReceivedCallback callback);
+    void set_zmq_context(void* ctx) { shared_zmq_ctx_ = ctx; }
+    void set_data_pipeline(std::shared_ptr<DataPipeline> p) { pipeline_ = std::move(p); }
 
 private:
     void dealer_loop(const std::string& camera_id, std::unordered_map<std::string, std::string> channels);
@@ -61,6 +64,8 @@ private:
     std::unordered_map<std::string, std::unique_ptr<SDKSlot>> slots_;
     std::atomic<bool> running_{false};
     DataReceivedCallback data_callback_;
+    void* shared_zmq_ctx_ = nullptr;
+    std::shared_ptr<DataPipeline> pipeline_;
 };
 
 } // namespace stereo_camera

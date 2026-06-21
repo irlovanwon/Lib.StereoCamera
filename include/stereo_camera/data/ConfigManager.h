@@ -29,6 +29,7 @@ struct Api2ServerConfig {
 
 struct Api2DataConfig {
     std::string transport;
+    int zmq_hwm = 2;
     std::unordered_map<std::string, std::string> pub_endpoints;
 };
 
@@ -57,6 +58,7 @@ struct Api3WssConfig {
 
 struct Api3DataConfig {
     Api3WssConfig wss_server;
+    int zmq_hwm = 1;
     std::unordered_map<std::string, std::string> sub_endpoints;
 };
 
@@ -65,10 +67,17 @@ struct Api3Config {
     Api3DataConfig data;
 };
 
+struct SpscConfig {
+    int queue_size = 4;
+    std::string drop_policy = "newest";
+};
+
 struct AppConfig {
     Api1Config api1;
     Api2Config api2;
     Api3Config api3;
+    SpscConfig spsc;
+    int data_buffer_depth = 3;
     std::string log_level;
 };
 
