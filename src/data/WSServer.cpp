@@ -337,11 +337,22 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
     if (pixels == 0 || half % 4 != 0) return false;
 
     int w = 0, h = 0;
-    if (pixels == (size_t)1280 * 720)       { w = 1280; h = 720; }
-    else if (pixels == (size_t)1920 * 1080) { w = 1920; h = 1080; }
-    else if (pixels == (size_t)672 * 376)   { w = 672;  h = 376; }
-    else if (pixels == (size_t)1280 * 480)  { w = 1280; h = 480; }
-    else return false;
+    static const struct { int pw, w, h; } res[] = {
+        {(int)(1280*720),  1280, 720},
+        {(int)(1920*1080), 1920, 1080},
+        {(int)(1920*1200), 1920, 1200},
+        {(int)(2208*1242), 2208, 1242},
+        {(int)(672*376),   672,  376},
+        {(int)(1280*480),  1280, 480},
+    };
+    for (auto& r : res) {
+        if ((int)pixels == r.pw) { w = r.w; h = r.h; break; }
+    }
+    if (w == 0) {
+        Logger::instance().warn("WSServer",
+            "encode_stereo_image: unknown resolution, pixels=" + std::to_string(pixels));
+        return false;
+    }
 
     tjhandle compressor = tjInitCompress();
     if (!compressor) return false;
