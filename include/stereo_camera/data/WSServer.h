@@ -11,8 +11,17 @@
 #include <mutex>
 #include <openssl/ssl.h>
 #include <openssl/evp.h>
+#include <turbojpeg.h>
+#include <condition_variable>
+#include <deque>
 
 namespace stereo_camera {
+
+struct EncodeTask {
+    std::string camera_id;
+    DataType type;
+    std::shared_ptr<DataBundle> bundle;
+};
 
 struct WSSClient {
     SSL* ssl = nullptr;
@@ -58,6 +67,17 @@ private:
 
     std::mutex clients_mutex_;
     std::vector<std::unique_ptr<WSSClient>> clients_;
+    // JPEG encode thread
+    void encode_loop();
+    bool encode_stereo_image(const std::vector<uint8_t>& raw_concat,
+                             std::vector<uint8_t>& encoded_out);
+    std::unique_ptr<std::thread> encode_thread_;
+    std::mutex encode_mutex_;
+    std::condition_variable encode_cv_;
+    std::deque<EncodeTask> encode_queue_;
+    static constexpr size_t ENCODE_QUEUE_MAX = 3;
+    int jpeg_quality_ = 80;
+
     std::atomic<uint32_t> frame_count_{0};
 };
 

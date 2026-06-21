@@ -11,6 +11,7 @@ find_package(nlohmann_json 3.2.0 REQUIRED)
 pkg_check_modules(ZMQ REQUIRED libzmq)
 pkg_check_modules(CURL REQUIRED libcurl)
 pkg_check_modules(OPENSSL REQUIRED openssl)
+pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
 
 set(LIB_SOURCES
     src/common/Parameter.cpp
@@ -39,11 +40,13 @@ target_include_directories(stereo_camera_lib PUBLIC
     ${ZMQ_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
+    ${TURBOJPEG_INCLUDE_DIRS}
 )
 target_link_libraries(stereo_camera_lib PUBLIC
     ${ZMQ_LIBRARIES}
     ${CURL_LIBRARIES}
     ${OPENSSL_LIBRARIES}
+    ${TURBOJPEG_LIBRARIES}
     nlohmann_json::nlohmann_json
     pthread
 )

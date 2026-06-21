@@ -64,6 +64,7 @@ void WSServer::start() {
     running_.store(true);
     accept_thread_ = std::make_unique<std::thread>(&WSServer::accept_loop, this);
     bcast_thread_ = std::make_unique<std::thread>(&WSServer::broadcast_loop, this);
+    encode_thread_ = std::make_unique<std::thread>(&WSServer::encode_loop, this);
 
     Logger::instance().info("WSServer", "Listening on " + host_ + ":" + std::to_string(port_));
 }
@@ -79,6 +80,10 @@ void WSServer::stop() {
     }
     if (bcast_thread_ && bcast_thread_->joinable()) {
         bcast_thread_->join();
+    }
+    encode_cv_.notify_all();
+    if (encode_thread_ && encode_thread_->joinable()) {
+        encode_thread_->join();
     }
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
@@ -304,12 +309,98 @@ void WSServer::broadcast_loop() {
         for (const auto& slot : slots) {
             auto bundle = buffer_->get_latest(slot.camera_id, slot.type);
             if (!bundle || bundle->payload.empty()) continue;
-            send_to_subscribers(slot.camera_id, slot.type, bundle);
+
+            if (slot.type == DataType::StereoImage) {
+                std::lock_guard<std::mutex> lk(encode_mutex_);
+                while (encode_queue_.size() >= ENCODE_QUEUE_MAX) {
+                    encode_queue_.pop_front();
+                }
+                encode_queue_.push_back({slot.camera_id, slot.type, bundle});
+                encode_cv_.notify_one();
+            } else {
+                send_to_subscribers(slot.camera_id, slot.type, bundle);
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     Logger::instance().info("WSServer", "Broadcast loop exited");
+}
+
+
+bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
+                                    std::vector<uint8_t>& encoded_out) {
+    if (raw_concat.size() < 8) return false;
+
+    size_t half = raw_concat.size() / 2;
+    size_t pixels = half / 4;
+    if (pixels == 0 || half % 4 != 0) return false;
+
+    int w = 0, h = 0;
+    if (pixels == (size_t)1280 * 720)       { w = 1280; h = 720; }
+    else if (pixels == (size_t)1920 * 1080) { w = 1920; h = 1080; }
+    else if (pixels == (size_t)672 * 376)   { w = 672;  h = 376; }
+    else if (pixels == (size_t)1280 * 480)  { w = 1280; h = 480; }
+    else return false;
+
+    tjhandle compressor = tjInitCompress();
+    if (!compressor) return false;
+
+    uint32_t left_sz = 0;
+    for (int img = 0; img < 2; img++) {
+        const uint8_t* src = raw_concat.data() + (img == 0 ? 0 : half);
+        unsigned char* jpeg_buf = nullptr;
+        unsigned long jpeg_size = 0;
+
+        int rc = tjCompress2(compressor, src, w, w * 4, h,
+                             TJPF_BGRA, &jpeg_buf, &jpeg_size,
+                             TJSAMP_420, jpeg_quality_, TJFLAG_FASTDCT);
+        if (rc != 0 || !jpeg_buf || jpeg_size == 0) {
+            if (jpeg_buf) tjFree(jpeg_buf);
+            tjDestroy(compressor);
+            return false;
+        }
+
+        if (img == 0) {
+            left_sz = static_cast<uint32_t>(jpeg_size);
+            encoded_out.reserve(4 + jpeg_size + jpeg_size / 2);
+            uint8_t* p = reinterpret_cast<uint8_t*>(&left_sz);
+            encoded_out.insert(encoded_out.end(), p, p + 4);
+        }
+        encoded_out.insert(encoded_out.end(), jpeg_buf, jpeg_buf + jpeg_size);
+        tjFree(jpeg_buf);
+    }
+
+    tjDestroy(compressor);
+    return true;
+}
+
+void WSServer::encode_loop() {
+    Logger::instance().info("WSServer", "JPEG encode loop started");
+
+    while (running_.load()) {
+        EncodeTask task;
+        {
+            std::unique_lock<std::mutex> lk(encode_mutex_);
+            encode_cv_.wait_for(lk, std::chrono::milliseconds(100),
+                [this]() { return !running_.load() || !encode_queue_.empty(); });
+            if (!running_.load()) break;
+            if (encode_queue_.empty()) continue;
+            task = std::move(encode_queue_.front());
+            encode_queue_.pop_front();
+        }
+
+        std::vector<uint8_t> encoded;
+        if (encode_stereo_image(task.bundle->payload, encoded)) {
+            auto out = std::make_shared<DataBundle>();
+            out->timestamp = task.bundle->timestamp;
+            out->type = task.bundle->type;
+            out->payload = std::move(encoded);
+            send_to_subscribers(task.camera_id, task.type, out);
+        }
+    }
+
+    Logger::instance().info("WSServer", "JPEG encode loop exited");
 }
 
 void WSServer::send_to_subscribers(const std::string& camera_id, DataType type,
