@@ -34,6 +34,8 @@ public:
     void start();
     void stop();
     bool is_running() const;
+    size_t client_count() const;
+    uint32_t total_frames() const;
 
 private:
     void accept_loop();

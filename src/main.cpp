@@ -95,6 +95,9 @@ int main(int argc, char* argv[]) {
 
     auto client_handler = std::make_shared<stereo_camera::ClientHandler>();
     client_handler->set_sdk_manager(sdk_manager);
+    client_handler->set_data_pipeline(pipeline);
+    client_handler->set_buffer2(buffer2);
+    client_handler->set_wss_server(&wss_server);
 
     stereo_camera::AdminServer server(
         cfg.api3.admin_server.host,

@@ -84,6 +84,18 @@ void WSServer::stop() {
     Logger::instance().info("WSServer", "Stopped");
 }
 
+
+size_t WSServer::client_count() const {
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(clients_mutex_));
+    size_t n = 0;
+    for (const auto& c : clients_) if (c->active.load()) ++n;
+    return n;
+}
+
+uint32_t WSServer::total_frames() const {
+    return frame_count_.load();
+}
+
 bool WSServer::is_running() const { return running_.load(); }
 
 void WSServer::accept_loop() {

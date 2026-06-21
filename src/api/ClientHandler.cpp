@@ -1,4 +1,7 @@
 #include "stereo_camera/api/ClientHandler.h"
+#include "stereo_camera/data/DataPipeline.h"
+#include "stereo_camera/data/DataBuffer.h"
+#include "stereo_camera/data/WSServer.h"
 #include "stereo_camera/data/SDKSlotManager.h"
 #include "stereo_camera/common/Logger.h"
 
@@ -107,6 +110,52 @@ Response ClientHandler::handle_check_status(const std::string& client_id) {
     nlohmann::json detail;
     detail["initialized"] = module_initialized_;
     detail["sessions"] = sessions_.size();
+
+    // Camera status from SDKSlotManager
+    if (sdk_manager_) {
+        detail["cameras"] = sdk_manager_->get_status();
+    }
+
+    // Pipeline metrics from DataPipeline
+    if (pipeline_) {
+        nlohmann::json pipe;
+        pipe["total_pushed"] = pipeline_->total_pushed.load();
+        pipe["total_dropped"] = pipeline_->total_dropped.load();
+        pipe["queue_2d_size"] = pipeline_->queue_2d.size();
+        pipe["queue_3d_size"] = pipeline_->queue_3d.size();
+        pipe["queue_sensor_size"] = pipeline_->queue_sensor.size();
+        uint64_t pushed = pipeline_->total_pushed.load();
+        uint64_t dropped = pipeline_->total_dropped.load();
+        pipe["drop_rate_pct"] = (pushed + dropped > 0)
+            ? (100.0 * dropped / (pushed + dropped)) : 0.0;
+        detail["pipeline"] = pipe;
+    }
+
+    // DataBuffer #2 stats
+    if (buffer2_) {
+        nlohmann::json buf;
+        auto slots = buffer2_->active_slots();
+        nlohmann::json slot_info = nlohmann::json::array();
+        for (const auto& s : slots) {
+            nlohmann::json si;
+            si["camera_id"] = s.camera_id;
+            si["type"] = data_type_to_channel(s.type);
+            si["buffered"] = buffer2_->slot_size(s.camera_id, s.type);
+            slot_info.push_back(si);
+        }
+        buf["active_slots"] = slot_info;
+        detail["data_buffer_2"] = buf;
+    }
+
+    // WSS stats
+    if (wss_server_) {
+        nlohmann::json wss;
+        wss["running"] = wss_server_->is_running();
+        wss["clients"] = wss_server_->client_count();
+        wss["frames_sent"] = wss_server_->total_frames();
+        detail["wss"] = wss;
+    }
+
     return make_response(ResponseCode::Success, "Status", detail);
 }
 

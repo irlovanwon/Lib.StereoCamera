@@ -12,6 +12,7 @@
 #include <mutex>
 #include <memory>
 #include <functional>
+#include <nlohmann/json.hpp>
 
 namespace stereo_camera {
 
@@ -45,6 +46,7 @@ public:
 
     std::shared_ptr<CameraSDKClient> get_client(const std::string& camera_id) const;
     std::vector<std::string> get_camera_ids() const;
+    nlohmann::json get_status() const;
 
     void start_all();
     void stop_all();

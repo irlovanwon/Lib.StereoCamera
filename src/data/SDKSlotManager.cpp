@@ -144,6 +144,27 @@ std::vector<std::string> SDKSlotManager::get_camera_ids() const {
     return ids;
 }
 
+nlohmann::json SDKSlotManager::get_status() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    nlohmann::json cameras = nlohmann::json::array();
+    for (const auto& [id, slot] : slots_) {
+        nlohmann::json cam;
+        cam["camera_id"] = id;
+        cam["capturing"] = slot->capturing.load();
+        cam["subscriber_count"] = slot->subscriber_count;
+        nlohmann::json types = nlohmann::json::array();
+        for (auto t : slot->active_types)
+            types.push_back(data_type_to_channel(t));
+        cam["active_types"] = types;
+        nlohmann::json chans = nlohmann::json::array();
+        for (const auto& [name, endpoint] : slot->channels)
+            chans.push_back({{"name", name}, {"endpoint", endpoint}});
+        cam["channels"] = chans;
+        cameras.push_back(cam);
+    }
+    return cameras;
+}
+
 void SDKSlotManager::start_all() {
     running_.store(true);
     for (const auto& [id, slot] : slots_) {
