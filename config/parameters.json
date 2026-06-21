@@ -2,36 +2,39 @@
     {
         "is_available": true,
         "is_readonly": false,
-        "name": "auto_gain",
+        "name": "fps",
         "type": "integer",
-        "value": 0
-    },
-    {
-        "is_available": true,
-        "is_readonly": false,
-        "name": "auto_exposure",
-        "type": "integer",
-        "value": 0
-    },
-    {
-        "is_available": true,
-        "is_readonly": false,
-        "name": "gain",
-        "type": "integer",
-        "value": 0
+        "value": 30,
+        "min": 15,
+        "max": 120
     },
     {
         "is_available": true,
         "is_readonly": false,
         "name": "exposure_time",
         "type": "integer",
-        "value": 0
+        "value": -1
     },
     {
         "is_available": true,
         "is_readonly": false,
-        "name": "fps",
+        "name": "analog_gain",
         "type": "integer",
-        "value": 0
+        "value": -1
+    },
+    {
+        "is_available": true,
+        "is_readonly": false,
+        "name": "digital_gain",
+        "type": "integer",
+        "value": -1
+    },
+    {
+        "is_available": true,
+        "is_readonly": false,
+        "name": "auto_exposure_gain",
+        "type": "enum",
+        "value": "On",
+        "options": ["On", "Off"]
     }
 ]
