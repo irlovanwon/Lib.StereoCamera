@@ -88,6 +88,20 @@ bool WSServer::is_running() const { return running_.load(); }
 
 void WSServer::accept_loop() {
     while (running_.load()) {
+        // Cleanup inactive clients: join thread, then erase
+        {
+            std::lock_guard<std::mutex> lock(clients_mutex_);
+            for (auto it = clients_.begin(); it != clients_.end();) {
+                if (!(*it)->active.load()) {
+                    if ((*it)->loop_thread && (*it)->loop_thread->joinable())
+                        (*it)->loop_thread->join();
+                    it = clients_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
         struct timeval tv{1, 0};
         fd_set rfds;
         FD_ZERO(&rfds);
@@ -360,19 +374,16 @@ void WSServer::client_loop(WSSClient* session) {
     }
 
     session->active.store(false);
-    SSL_shutdown(session->ssl);
-    SSL_free(session->ssl);
-    close(session->fd);
-    session->ssl = nullptr;
-
-    {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
-        clients_.erase(
-            std::remove_if(clients_.begin(), clients_.end(),
-                [](const std::unique_ptr<WSSClient>& c) { return !c->active.load(); }),
-            clients_.end());
+    if (session->ssl) {
+        SSL_shutdown(session->ssl);
+        SSL_free(session->ssl);
+        session->ssl = nullptr;
     }
-    Logger::instance().info("WSServer", "Client disconnected");
+    if (session->fd >= 0) {
+        close(session->fd);
+        session->fd = -1;
+    }
+    Logger::instance().info("WSServer", "Client disconnected (cleanup deferred to accept_loop)");
 
     if (frame_count_.load() % 500 == 0 && frame_count_.load() > 0) {
         std::lock_guard<std::mutex> lock(clients_mutex_);
