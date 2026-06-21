@@ -7,6 +7,7 @@
 #include <cstring>
 #include <chrono>
 #include <openssl/sha.h>
+#include <algorithm>
 
 namespace stereo_camera {
 
@@ -30,9 +31,7 @@ WSServer::WSServer(std::shared_ptr<DataBuffer> buffer,
     : buffer_(std::move(buffer)), host_(host), port_(port),
       cert_path_(cert_path), key_path_(key_path) {}
 
-WSServer::~WSServer() {
-    stop();
-}
+WSServer::~WSServer() { stop(); }
 
 void WSServer::start() {
     if (running_.load()) return;
@@ -53,66 +52,43 @@ void WSServer::start() {
 
     if (bind(listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         Logger::instance().error("WSServer", "Bind failed: " + std::string(strerror(errno)));
-        close(listen_fd_);
-        listen_fd_ = -1;
-        SSL_CTX_free(ssl_ctx_);
-        ssl_ctx_ = nullptr;
+        close(listen_fd_); listen_fd_ = -1;
+        SSL_CTX_free(ssl_ctx_); ssl_ctx_ = nullptr;
         return;
     }
     listen(listen_fd_, 8);
 
     running_.store(true);
     accept_thread_ = std::make_unique<std::thread>(&WSServer::accept_loop, this);
-    bcast_thread_ = std::make_unique<std::thread>(&WSServer::broadcast_loop, this);
     encode_thread_ = std::make_unique<std::thread>(&WSServer::encode_loop, this);
 
-    Logger::instance().info("WSServer", "Listening on " + host_ + ":" + std::to_string(port_));
+    Logger::instance().info("WSServer", "Listening on " + host_ + ":" + std::to_string(port_) + " (One Loop Per Thread)");
 }
 
 void WSServer::stop() {
     running_.store(false);
-    if (listen_fd_ >= 0) {
-        close(listen_fd_);
-        listen_fd_ = -1;
-    }
-    if (accept_thread_ && accept_thread_->joinable()) {
-        accept_thread_->join();
-    }
-    if (bcast_thread_ && bcast_thread_->joinable()) {
-        bcast_thread_->join();
-    }
-    encode_cv_.notify_all();
-    if (encode_thread_ && encode_thread_->joinable()) {
-        encode_thread_->join();
-    }
+    if (listen_fd_ >= 0) { close(listen_fd_); listen_fd_ = -1; }
+    if (accept_thread_ && accept_thread_->joinable()) accept_thread_->join();
+    if (encode_thread_ && encode_thread_->joinable()) encode_thread_->join();
+
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
         for (auto& c : clients_) {
             c->active.store(false);
-            if (c->ssl) {
-                SSL_shutdown(c->ssl);
-                SSL_free(c->ssl);
-                c->ssl = nullptr;
-            }
+            if (c->loop_thread && c->loop_thread->joinable()) c->loop_thread->join();
+            if (c->ssl) { SSL_shutdown(c->ssl); SSL_free(c->ssl); c->ssl = nullptr; }
         }
         clients_.clear();
     }
-    if (ssl_ctx_) {
-        SSL_CTX_free(ssl_ctx_);
-        ssl_ctx_ = nullptr;
-    }
+    if (ssl_ctx_) { SSL_CTX_free(ssl_ctx_); ssl_ctx_ = nullptr; }
     Logger::instance().info("WSServer", "Stopped");
 }
 
-bool WSServer::is_running() const {
-    return running_.load();
-}
+bool WSServer::is_running() const { return running_.load(); }
 
 void WSServer::accept_loop() {
     while (running_.load()) {
-        struct timeval tv;
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
+        struct timeval tv{1, 0};
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(listen_fd_, &rfds);
@@ -126,73 +102,25 @@ void WSServer::accept_loop() {
         SSL_set_fd(ssl, client_fd);
         SSL_set_verify(ssl, SSL_VERIFY_NONE, nullptr);
 
-        int rc_ssl = SSL_accept(ssl);
-        if (rc_ssl <= 0) {
-            Logger::instance().warn("WSServer", "TLS handshake failed");
-            SSL_free(ssl);
-            close(client_fd);
-            continue;
+        if (SSL_accept(ssl) <= 0) {
+            SSL_free(ssl); close(client_fd); continue;
         }
-
         if (!ws_handshake(ssl)) {
-            SSL_free(ssl);
-            close(client_fd);
-            continue;
+            SSL_free(ssl); close(client_fd); continue;
         }
 
         auto client = std::make_unique<WSSClient>();
         client->ssl = ssl;
         client->fd = client_fd;
+        WSSClient* raw = client.get();
 
         {
             std::lock_guard<std::mutex> lock(clients_mutex_);
             clients_.push_back(std::move(client));
-            Logger::instance().info("WSServer",
-                "Client connected (total=" + std::to_string(clients_.size()) + ")");
+            Logger::instance().info("WSServer", "Client connected (total=" + std::to_string(clients_.size()) + ")");
         }
 
-        std::thread([this, client_fd, ssl]() {
-            uint8_t opcode;
-            std::vector<uint8_t> payload;
-            WSSClient* session = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(clients_mutex_);
-                for (auto& c : clients_) {
-                    if (c->ssl == ssl) { session = c.get(); break; }
-                }
-            }
-            if (!session) return;
-
-            while (running_.load() && session->active.load()) {
-                if (!ws_read_frame(ssl, opcode, payload)) {
-                    break;
-                }
-                if (opcode == 0x8) break;
-
-                if (opcode == 0x1 && !payload.empty()) {
-                    std::string msg(payload.begin(), payload.end());
-                    if (msg.find("\"subscribe\"") != std::string::npos) {
-                        session->subscriptions.insert("all");
-                        Logger::instance().info("WSServer", "Client subscribed");
-                        std::string resp = R"({"status":"subscribed"})";
-                        ws_send_binary(ssl, (const uint8_t*)resp.data(), resp.size());
-                    }
-                }
-            }
-
-            session->active.store(false);
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-            close(client_fd);
-            {
-                std::lock_guard<std::mutex> lock(clients_mutex_);
-                clients_.erase(
-                    std::remove_if(clients_.begin(), clients_.end(),
-                        [](const std::unique_ptr<WSSClient>& c) { return !c->active.load(); }),
-                    clients_.end());
-            }
-            Logger::instance().info("WSServer", "Client disconnected");
-        }).detach();
+        raw->loop_thread = std::make_unique<std::thread>(&WSServer::client_loop, this, raw);
     }
 }
 
@@ -201,11 +129,9 @@ bool WSServer::ws_handshake(SSL* ssl) {
     int n = SSL_read(ssl, buf, sizeof(buf) - 1);
     if (n <= 0) return false;
     buf[n] = '\0';
-
     std::string request(buf, n);
     size_t key_pos = request.find("Sec-WebSocket-Key: ");
     if (key_pos == std::string::npos) return false;
-
     size_t key_start = key_pos + 19;
     size_t key_end = request.find("\r\n", key_start);
     std::string ws_key = request.substr(key_start, key_end - key_start);
@@ -220,17 +146,13 @@ bool WSServer::ws_handshake(SSL* ssl) {
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Accept: " + accept_key + "\r\n\r\n";
-
     SSL_write(ssl, response.c_str(), response.size());
     return true;
 }
 
 bool WSServer::ws_send_binary(SSL* ssl, const uint8_t* data, size_t len) {
     std::vector<uint8_t> frame;
-
-    uint8_t byte0 = 0x82;
-    frame.push_back(byte0);
-
+    frame.push_back(0x82);
     if (len < 126) {
         frame.push_back(static_cast<uint8_t>(len));
     } else if (len < 65536) {
@@ -239,11 +161,9 @@ bool WSServer::ws_send_binary(SSL* ssl, const uint8_t* data, size_t len) {
         frame.push_back(len & 0xFF);
     } else {
         frame.push_back(127);
-        for (int i = 7; i >= 0; --i) {
+        for (int i = 7; i >= 0; --i)
             frame.push_back((len >> (i * 8)) & 0xFF);
-        }
     }
-
     frame.insert(frame.end(), data, data + len);
 
     int total_sent = 0;
@@ -259,11 +179,9 @@ bool WSServer::ws_read_frame(SSL* ssl, uint8_t& opcode, std::vector<uint8_t>& pa
     uint8_t hdr[2];
     int n = SSL_read(ssl, hdr, 2);
     if (n <= 0) return false;
-
     opcode = hdr[0] & 0x0F;
     bool masked = (hdr[1] & 0x80) != 0;
     uint64_t payload_len = hdr[1] & 0x7F;
-
     if (payload_len == 126) {
         uint8_t ext[2];
         if (SSL_read(ssl, ext, 2) <= 0) return false;
@@ -272,16 +190,10 @@ bool WSServer::ws_read_frame(SSL* ssl, uint8_t& opcode, std::vector<uint8_t>& pa
         uint8_t ext[8];
         if (SSL_read(ssl, ext, 8) <= 0) return false;
         payload_len = 0;
-        for (int i = 0; i < 8; ++i) {
-            payload_len = (payload_len << 8) | ext[i];
-        }
+        for (int i = 0; i < 8; ++i) payload_len = (payload_len << 8) | ext[i];
     }
-
     uint8_t mask[4] = {0};
-    if (masked) {
-        if (SSL_read(ssl, mask, 4) <= 0) return false;
-    }
-
+    if (masked) { if (SSL_read(ssl, mask, 4) <= 0) return false; }
     if (payload_len > 0) {
         payload.resize(payload_len);
         size_t total = 0;
@@ -291,136 +203,14 @@ bool WSServer::ws_read_frame(SSL* ssl, uint8_t& opcode, std::vector<uint8_t>& pa
             if (n <= 0) return false;
             total += n;
         }
-        if (masked) {
-            for (size_t i = 0; i < payload_len; ++i) {
-                payload[i] ^= mask[i % 4];
-            }
-        }
+        if (masked)
+            for (size_t i = 0; i < payload_len; ++i) payload[i] ^= mask[i % 4];
     }
-
     return true;
 }
 
-void WSServer::broadcast_loop() {
-    Logger::instance().info("WSServer", "Broadcast loop started");
-
-    while (running_.load()) {
-        auto slots = buffer_->active_slots();
-        for (const auto& slot : slots) {
-            auto bundle = buffer_->get_latest(slot.camera_id, slot.type);
-            if (!bundle || bundle->payload.empty()) continue;
-
-            if (slot.type == DataType::StereoImage) {
-                {
-                    std::lock_guard<std::mutex> lk(encode_mutex_);
-                    if (encode_queue_.size() >= ENCODE_QUEUE_MAX) {
-                        // Drop-NEWEST: reject incoming frame
-                    } else {
-                        encode_queue_.push_back({slot.camera_id, slot.type, bundle});
-                        encode_cv_.notify_one();
-                    }
-                }
-            } else {
-                send_to_subscribers(slot.camera_id, slot.type, bundle);
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    Logger::instance().info("WSServer", "Broadcast loop exited");
-}
-
-
-bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
-                                    std::vector<uint8_t>& encoded_out) {
-    if (raw_concat.size() < 8) return false;
-
-    size_t half = raw_concat.size() / 2;
-    size_t pixels = half / 4;
-    if (pixels == 0 || half % 4 != 0) return false;
-
-    int w = 0, h = 0;
-    static const struct { int pw, w, h; } res[] = {
-        {(int)(1280*720),  1280, 720},
-        {(int)(1920*1080), 1920, 1080},
-        {(int)(1920*1200), 1920, 1200},
-        {(int)(2208*1242), 2208, 1242},
-        {(int)(672*376),   672,  376},
-        {(int)(1280*480),  1280, 480},
-    };
-    for (auto& r : res) {
-        if ((int)pixels == r.pw) { w = r.w; h = r.h; break; }
-    }
-    if (w == 0) {
-        Logger::instance().warn("WSServer",
-            "encode_stereo_image: unknown resolution, pixels=" + std::to_string(pixels));
-        return false;
-    }
-
-    tjhandle compressor = tjInitCompress();
-    if (!compressor) return false;
-
-    uint32_t left_sz = 0;
-    for (int img = 0; img < 2; img++) {
-        const uint8_t* src = raw_concat.data() + (img == 0 ? 0 : half);
-        unsigned char* jpeg_buf = nullptr;
-        unsigned long jpeg_size = 0;
-
-        int rc = tjCompress2(compressor, src, w, w * 4, h,
-                             TJPF_BGRA, &jpeg_buf, &jpeg_size,
-                             TJSAMP_420, jpeg_quality_, TJFLAG_FASTDCT);
-        if (rc != 0 || !jpeg_buf || jpeg_size == 0) {
-            if (jpeg_buf) tjFree(jpeg_buf);
-            tjDestroy(compressor);
-            return false;
-        }
-
-        if (img == 0) {
-            left_sz = static_cast<uint32_t>(jpeg_size);
-            encoded_out.reserve(4 + jpeg_size + jpeg_size / 2);
-            uint8_t* p = reinterpret_cast<uint8_t*>(&left_sz);
-            encoded_out.insert(encoded_out.end(), p, p + 4);
-        }
-        encoded_out.insert(encoded_out.end(), jpeg_buf, jpeg_buf + jpeg_size);
-        tjFree(jpeg_buf);
-    }
-
-    tjDestroy(compressor);
-    return true;
-}
-
-void WSServer::encode_loop() {
-    Logger::instance().info("WSServer", "JPEG encode loop started");
-
-    while (running_.load()) {
-        EncodeTask task;
-        {
-            std::unique_lock<std::mutex> lk(encode_mutex_);
-            encode_cv_.wait_for(lk, std::chrono::milliseconds(100),
-                [this]() { return !running_.load() || !encode_queue_.empty(); });
-            if (!running_.load()) break;
-            if (encode_queue_.empty()) continue;
-            task = std::move(encode_queue_.front());
-            encode_queue_.pop_front();
-        }
-
-        std::vector<uint8_t> encoded;
-        if (encode_stereo_image(task.bundle->payload, encoded)) {
-            auto out = std::make_shared<DataBundle>();
-            out->timestamp = task.bundle->timestamp;
-            out->type = task.bundle->type;
-            out->payload = std::move(encoded);
-            send_to_subscribers(task.camera_id, task.type, out);
-        }
-    }
-
-    Logger::instance().info("WSServer", "JPEG encode loop exited");
-}
-
-void WSServer::send_to_subscribers(const std::string& camera_id, DataType type,
-                                    const std::shared_ptr<DataBundle>& bundle) {
-    std::string channel = data_type_to_channel(type);
-
+void WSServer::send_to_one(WSSClient* session, DataType type,
+                            const std::shared_ptr<DataBundle>& bundle) {
     std::vector<uint8_t> frame;
     uint32_t type_tag = static_cast<uint32_t>(type);
     uint32_t ts_sec = static_cast<uint32_t>(bundle->timestamp.sec);
@@ -431,20 +221,163 @@ void WSServer::send_to_subscribers(const std::string& camera_id, DataType type,
     frame.insert(frame.end(), (uint8_t*)&ts_nsec, (uint8_t*)&ts_nsec + 4);
     frame.insert(frame.end(), bundle->payload.begin(), bundle->payload.end());
 
-    std::lock_guard<std::mutex> lock(clients_mutex_);
-    for (auto& client : clients_) {
-        if (!client->active.load() || client->subscriptions.empty()) continue;
+    std::lock_guard<std::mutex> send_lock(session->send_mutex);
+    if (!ws_send_binary(session->ssl, frame.data(), frame.size())) {
+        session->active.store(false);
+    }
+}
 
-        std::lock_guard<std::mutex> send_lock(client->send_mutex);
-        if (!ws_send_binary(client->ssl, frame.data(), frame.size())) {
-            client->active.store(false);
+bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
+                                    std::vector<uint8_t>& encoded_out) {
+    if (raw_concat.size() < 8) return false;
+    size_t half = raw_concat.size() / 2;
+    size_t pixels = half / 4;
+    if (pixels == 0 || half % 4 != 0) return false;
+
+    int w = 0, h = 0;
+    static const struct { int pw, w, h; } res[] = {
+        {(int)(1280*720),  1280, 720},  {(int)(1920*1080), 1920, 1080},
+        {(int)(1920*1200), 1920, 1200}, {(int)(2208*1242), 2208, 1242},
+        {(int)(672*376),   672,  376},  {(int)(1280*480),  1280, 480},
+    };
+    for (auto& r : res)
+        if ((int)pixels == r.pw) { w = r.w; h = r.h; break; }
+    if (w == 0) return false;
+
+    tjhandle compressor = tjInitCompress();
+    if (!compressor) return false;
+
+    uint32_t left_sz = 0;
+    for (int img = 0; img < 2; img++) {
+        const uint8_t* src = raw_concat.data() + (img == 0 ? 0 : half);
+        unsigned char* jpeg_buf = nullptr;
+        unsigned long jpeg_size = 0;
+        int rc = tjCompress2(compressor, src, w, w * 4, h,
+                             TJPF_BGRA, &jpeg_buf, &jpeg_size,
+                             TJSAMP_420, jpeg_quality_, TJFLAG_FASTDCT);
+        if (rc != 0 || !jpeg_buf || jpeg_size == 0) {
+            if (jpeg_buf) tjFree(jpeg_buf);
+            tjDestroy(compressor);
+            return false;
+        }
+        if (img == 0) {
+            left_sz = static_cast<uint32_t>(jpeg_size);
+            encoded_out.reserve(4 + jpeg_size + jpeg_size / 2);
+            uint8_t* p = reinterpret_cast<uint8_t*>(&left_sz);
+            encoded_out.insert(encoded_out.end(), p, p + 4);
+        }
+        encoded_out.insert(encoded_out.end(), jpeg_buf, jpeg_buf + jpeg_size);
+        tjFree(jpeg_buf);
+    }
+    tjDestroy(compressor);
+    return true;
+}
+
+void WSServer::encode_loop() {
+    Logger::instance().info("WSServer", "Encode loop started (polls DataBuffer, caches encoded)");
+
+    while (running_.load()) {
+        auto slots = buffer_->active_slots();
+        for (const auto& slot : slots) {
+            if (slot.type != DataType::StereoImage) continue;
+            auto bundle = buffer_->get_latest(slot.camera_id, slot.type);
+            if (!bundle || bundle->payload.empty()) continue;
+            if (bundle.get() == last_encoded_ptr_) continue;
+            last_encoded_ptr_ = bundle.get();
+
+            std::vector<uint8_t> encoded;
+            if (encode_stereo_image(bundle->payload, encoded)) {
+                auto out = std::make_shared<DataBundle>();
+                out->timestamp = bundle->timestamp;
+                out->type = bundle->type;
+                out->payload = std::move(encoded);
+                {
+                    std::lock_guard<std::mutex> lk(encoded_mutex_);
+                    encoded_stereo_[slot.camera_id] = std::move(out);
+                }
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    Logger::instance().info("WSServer", "Encode loop exited");
+}
+
+void WSServer::client_loop(WSSClient* session) {
+    // Send subscribed response
+    std::string resp = R"({"status":"ready"})";
+    {
+        std::lock_guard<std::mutex> lk(session->send_mutex);
+        ws_send_binary(session->ssl, (const uint8_t*)resp.data(), resp.size());
+    }
+
+    while (running_.load() && session->active.load()) {
+        // 1. Check for incoming frames (subscription updates)
+        struct timeval tv{0, 10000}; // 10ms
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(session->fd, &rfds);
+        int rc = select(session->fd + 1, &rfds, nullptr, nullptr, &tv);
+
+        if (rc > 0 && FD_ISSET(session->fd, &rfds)) {
+            uint8_t opcode;
+            std::vector<uint8_t> payload;
+            if (!ws_read_frame(session->ssl, opcode, payload)) break;
+            if (opcode == 0x8) break;
+            if (opcode == 0x1 && !payload.empty()) {
+                std::string msg(payload.begin(), payload.end());
+                if (msg.find("\"subscribe\"") != std::string::npos) {
+                    session->subscriptions.insert("all");
+                    Logger::instance().info("WSServer", "Client subscribed");
+                }
+            }
+        }
+
+        // 2. Send data (One Loop Per Thread — each client sends independently)
+        if (session->subscriptions.empty()) continue;
+
+        auto slots = buffer_->active_slots();
+        for (const auto& slot : slots) {
+            std::shared_ptr<DataBundle> bundle;
+
+            if (slot.type == DataType::StereoImage) {
+                std::lock_guard<std::mutex> lk(encoded_mutex_);
+                auto it = encoded_stereo_.find(slot.camera_id);
+                if (it != encoded_stereo_.end()) bundle = it->second;
+            } else {
+                bundle = buffer_->get_latest(slot.camera_id, slot.type);
+            }
+
+            if (!bundle || bundle->payload.empty()) continue;
+
+            // Dedup per client
+            std::string key = slot.camera_id + "/" + std::to_string(static_cast<int>(slot.type));
+            if (session->last_sent[key] == bundle.get()) continue;
+            session->last_sent[key] = bundle.get();
+
+            send_to_one(session, slot.type, bundle);
+            frame_count_.fetch_add(1);
         }
     }
 
-    frame_count_.fetch_add(1);
-    if (frame_count_.load() % 500 == 0) {
+    session->active.store(false);
+    SSL_shutdown(session->ssl);
+    SSL_free(session->ssl);
+    close(session->fd);
+    session->ssl = nullptr;
+
+    {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        clients_.erase(
+            std::remove_if(clients_.begin(), clients_.end(),
+                [](const std::unique_ptr<WSSClient>& c) { return !c->active.load(); }),
+            clients_.end());
+    }
+    Logger::instance().info("WSServer", "Client disconnected");
+
+    if (frame_count_.load() % 500 == 0 && frame_count_.load() > 0) {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
         Logger::instance().info("WSServer",
-            "Broadcast " + std::to_string(frame_count_.load()) + " frames, " +
+            "Sent " + std::to_string(frame_count_.load()) + " frames, " +
             std::to_string(clients_.size()) + " clients");
     }
 }

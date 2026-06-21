@@ -11,7 +11,8 @@ namespace stereo_camera {
 class AdminServer {
 public:
     AdminServer(const std::string& host, uint16_t port,
-                const std::string& cert_path, const std::string& key_path);
+                const std::string& cert_path, const std::string& key_path,
+                int worker_count = 4);
     ~AdminServer();
 
     void set_client_handler(std::shared_ptr<ClientHandler> handler);

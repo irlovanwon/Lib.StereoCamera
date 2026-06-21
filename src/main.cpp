@@ -99,7 +99,8 @@ int main(int argc, char* argv[]) {
     stereo_camera::AdminServer server(
         cfg.api3.admin_server.host,
         static_cast<uint16_t>(cfg.api3.admin_server.port),
-        cert_path, key_path);
+        cert_path, key_path,
+        cfg.api3.admin_server.worker_threads);
     server.set_client_handler(client_handler);
     server.set_parameter_manager(param_mgr);
     server.start();
@@ -107,7 +108,8 @@ int main(int argc, char* argv[]) {
     stereo_camera::AdminServer api2_server(
         cfg.api2.server.host,
         static_cast<uint16_t>(cfg.api2.server.port),
-        cert_path, key_path);
+        cert_path, key_path,
+        cfg.api2.server.worker_threads);
     api2_server.set_client_handler(client_handler);
     api2_server.set_parameter_manager(param_mgr);
     api2_server.start();

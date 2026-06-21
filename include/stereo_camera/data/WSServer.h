@@ -10,18 +10,9 @@
 #include <vector>
 #include <mutex>
 #include <openssl/ssl.h>
-#include <openssl/evp.h>
 #include <turbojpeg.h>
-#include <condition_variable>
-#include <deque>
 
 namespace stereo_camera {
-
-struct EncodeTask {
-    std::string camera_id;
-    DataType type;
-    std::shared_ptr<DataBundle> bundle;
-};
 
 struct WSSClient {
     SSL* ssl = nullptr;
@@ -29,6 +20,8 @@ struct WSSClient {
     std::mutex send_mutex;
     std::unordered_set<std::string> subscriptions;
     std::atomic<bool> active{true};
+    std::unordered_map<std::string, const void*> last_sent;
+    std::unique_ptr<std::thread> loop_thread;
 };
 
 class WSServer {
@@ -44,13 +37,16 @@ public:
 
 private:
     void accept_loop();
-    void client_loop(int fd, SSL* ssl);
-    void broadcast_loop();
+    void client_loop(WSSClient* session);
+    void encode_loop();
+
     bool ws_handshake(SSL* ssl);
     bool ws_send_binary(SSL* ssl, const uint8_t* data, size_t len);
     bool ws_read_frame(SSL* ssl, uint8_t& opcode, std::vector<uint8_t>& payload);
-    void send_to_subscribers(const std::string& camera_id, DataType type,
-                             const std::shared_ptr<DataBundle>& bundle);
+    void send_to_one(WSSClient* session, DataType type,
+                     const std::shared_ptr<DataBundle>& bundle);
+    bool encode_stereo_image(const std::vector<uint8_t>& raw_concat,
+                             std::vector<uint8_t>& encoded_out);
 
     std::shared_ptr<DataBuffer> buffer_;
     std::string host_;
@@ -63,21 +59,17 @@ private:
     std::atomic<bool> running_{false};
 
     std::unique_ptr<std::thread> accept_thread_;
-    std::unique_ptr<std::thread> bcast_thread_;
+    std::unique_ptr<std::thread> encode_thread_;
 
     std::mutex clients_mutex_;
     std::vector<std::unique_ptr<WSSClient>> clients_;
-    // JPEG encode thread
-    void encode_loop();
-    bool encode_stereo_image(const std::vector<uint8_t>& raw_concat,
-                             std::vector<uint8_t>& encoded_out);
-    std::unique_ptr<std::thread> encode_thread_;
-    std::mutex encode_mutex_;
-    std::condition_variable encode_cv_;
-    std::deque<EncodeTask> encode_queue_;
-    static constexpr size_t ENCODE_QUEUE_MAX = 3;
-    int jpeg_quality_ = 80;
 
+    // Encoded stereo cache (encode once, all clients read)
+    std::mutex encoded_mutex_;
+    std::unordered_map<std::string, std::shared_ptr<DataBundle>> encoded_stereo_;
+    const void* last_encoded_ptr_ = nullptr;
+
+    int jpeg_quality_ = 80;
     std::atomic<uint32_t> frame_count_{0};
 };
 
