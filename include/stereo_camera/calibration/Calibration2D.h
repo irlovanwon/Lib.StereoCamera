@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <string>
+#include <nlohmann/json.hpp>
 
 namespace stereo_camera {
 
@@ -11,6 +12,11 @@ struct CalibrationParams2D {
     double cx = 0;
     double cy = 0;
     std::vector<double> distortion;
+
+    bool valid() const { return fx > 0 && fy > 0; }
+
+    nlohmann::json to_json() const;
+    static CalibrationParams2D from_json(const nlohmann::json& j);
 };
 
 struct Point2D { double x, y; };
@@ -26,6 +32,10 @@ public:
         uint32_t image_width, uint32_t image_height);
 
     CalibrationParams2D params() const;
+    void set_params(const CalibrationParams2D& p);
+
+    bool save(const std::string& path) const;
+    bool load(const std::string& path);
 
 private:
     CalibrationParams2D params_;
