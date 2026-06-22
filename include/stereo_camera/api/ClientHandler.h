@@ -42,7 +42,7 @@ private:
     std::shared_ptr<DataBuffer> buffer2_;
     WSServer* wss_server_ = nullptr;
     std::unordered_map<std::string, ClientSession> sessions_;
-    bool module_initialized_ = false;
+    bool module_initialized_ = true;
 };
 
 } // namespace stereo_camera

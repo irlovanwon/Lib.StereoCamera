@@ -1,5 +1,6 @@
 #include "stereo_camera/data/WSServer.h"
 #include "stereo_camera/common/Logger.h"
+#include <nlohmann/json.hpp>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -351,9 +352,19 @@ void WSServer::client_loop(WSSClient* session) {
             if (opcode == 0x8) break;
             if (opcode == 0x1 && !payload.empty()) {
                 std::string msg(payload.begin(), payload.end());
-                if (msg.find("\"subscribe\"") != std::string::npos) {
+                try {
+                    auto j = nlohmann::json::parse(msg);
+                    std::string action = j.value("action", "");
+                    if (action == "subscribe" && j.contains("topics")) {
+                        for (auto& t : j["topics"])
+                            session->subscriptions.insert(t.get<std::string>());
+                        Logger::instance().info("WSServer", "Client subscribed: " + msg);
+                    } else if (action == "unsubscribe" && j.contains("topics")) {
+                        for (auto& t : j["topics"])
+                            session->subscriptions.erase(t.get<std::string>());
+                    }
+                } catch (...) {
                     session->subscriptions.insert("all");
-                    Logger::instance().info("WSServer", "Client subscribed");
                 }
             }
         }
@@ -363,6 +374,18 @@ void WSServer::client_loop(WSSClient* session) {
 
         auto slots = buffer_->active_slots();
         for (const auto& slot : slots) {
+            // Filter by subscribed topics
+            std::string channel = data_type_to_channel(slot.type);
+            std::string full_topic = slot.camera_id + "/" + channel;
+            bool is_subscribed = false;
+            for (const auto& sub : session->subscriptions) {
+                if (sub == "all" || sub == channel || sub == full_topic) {
+                    is_subscribed = true;
+                    break;
+                }
+            }
+            if (!is_subscribed) continue;
+
             std::shared_ptr<DataBundle> bundle;
 
             if (slot.type == DataType::StereoImage) {

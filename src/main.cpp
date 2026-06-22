@@ -106,6 +106,8 @@ int main(int argc, char* argv[]) {
         cfg.api3.admin_server.worker_threads);
     server.set_client_handler(client_handler);
     server.set_parameter_manager(param_mgr);
+    // Auto-initialize: connect to all camera SDKs at startup (Init/Dispose are internal)
+    sdk_manager->start_all();
     server.start();
 
     stereo_camera::AdminServer api2_server(

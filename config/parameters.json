@@ -4,37 +4,34 @@
         "is_readonly": false,
         "name": "fps",
         "type": "integer",
-        "value": 30,
-        "min": 15,
-        "max": 120
+        "value": 0
     },
     {
         "is_available": true,
         "is_readonly": false,
         "name": "exposure_time",
         "type": "integer",
-        "value": -1
+        "value": 0
     },
     {
         "is_available": true,
         "is_readonly": false,
-        "name": "analog_gain",
+        "name": "gain",
         "type": "integer",
-        "value": -1
+        "value": 0
     },
     {
         "is_available": true,
         "is_readonly": false,
-        "name": "digital_gain",
+        "name": "auto_exposure",
         "type": "integer",
-        "value": -1
+        "value": 0
     },
     {
         "is_available": true,
         "is_readonly": false,
-        "name": "auto_exposure_gain",
-        "type": "enum",
-        "value": "On",
-        "options": ["On", "Off"]
+        "name": "auto_gain",
+        "type": "integer",
+        "value": 0
     }
 ]

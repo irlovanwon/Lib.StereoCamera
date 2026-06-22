@@ -12,29 +12,15 @@ void ClientHandler::set_sdk_manager(std::shared_ptr<SDKSlotManager> mgr) {
 }
 
 Response ClientHandler::handle_init(const std::string& client_id) {
-    if (module_initialized_) {
-        Logger::instance().info("ClientHandler", "Init: already initialized, returning success for " + client_id);
-        return make_response(ResponseCode::AlreadyInit, "Already initialized");
-    }
-    if (sdk_manager_) {
-        sdk_manager_->start_all();
-    }
-    module_initialized_ = true;
-    Logger::instance().info("ClientHandler", "Init: module initialized by " + client_id);
-    return make_response(ResponseCode::Success, "Initialized");
+    // Module is initialized at service startup. init/dispose are internal lifecycle
+    // operations — clients should use connect/disconnect for session management.
+    return make_response(ResponseCode::AlreadyInit, "Already initialized — use connect to start a session");
 }
 
 Response ClientHandler::handle_dispose(const std::string& client_id) {
-    if (!module_initialized_) {
-        return make_response(ResponseCode::NotReady, "Not initialized");
-    }
-    if (sdk_manager_) {
-        sdk_manager_->stop_all();
-    }
-    module_initialized_ = false;
-    sessions_.clear();
-    Logger::instance().info("ClientHandler", "Dispose by " + client_id);
-    return make_response(ResponseCode::Success, "Disposed");
+    // Dispose is an internal lifecycle operation handled at service shutdown.
+    // Clients must not stop the module via API.
+    return make_response(ResponseCode::Error, "Dispose not permitted via API — shutdown the service instead");
 }
 
 Response ClientHandler::handle_connect(const std::string& client_id) {
