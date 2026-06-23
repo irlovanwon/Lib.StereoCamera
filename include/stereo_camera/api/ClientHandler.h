@@ -4,6 +4,8 @@
 #include "stereo_camera/common/Response.h"
 #include <string>
 #include <memory>
+#include <mutex>
+#include <atomic>
 
 namespace stereo_camera {
 
@@ -41,8 +43,9 @@ private:
     std::shared_ptr<DataPipeline> pipeline_;
     std::shared_ptr<DataBuffer> buffer2_;
     WSServer* wss_server_ = nullptr;
+    std::mutex sessions_mutex_;
     std::unordered_map<std::string, ClientSession> sessions_;
-    bool module_initialized_ = true;
+    std::atomic<bool> module_initialized_{true};
 };
 
 } // namespace stereo_camera

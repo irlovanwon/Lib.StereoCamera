@@ -24,9 +24,10 @@ Response ClientHandler::handle_dispose(const std::string& client_id) {
 }
 
 Response ClientHandler::handle_connect(const std::string& client_id) {
-    if (!module_initialized_) {
+    if (!module_initialized_.load()) {
         return make_response(ResponseCode::NotReady, "Not initialized");
     }
+    std::lock_guard<std::mutex> lk(sessions_mutex_);
     auto& session = sessions_[client_id];
     if (session.connected) {
         return make_response(ResponseCode::AlreadyInit, "Already connected");
@@ -38,6 +39,7 @@ Response ClientHandler::handle_connect(const std::string& client_id) {
 }
 
 Response ClientHandler::handle_disconnect(const std::string& client_id) {
+    std::lock_guard<std::mutex> lk(sessions_mutex_);
     auto it = sessions_.find(client_id);
     if (it == sessions_.end() || !it->second.connected) {
         return make_response(ResponseCode::NotReady, "Not connected");
@@ -48,9 +50,12 @@ Response ClientHandler::handle_disconnect(const std::string& client_id) {
 }
 
 Response ClientHandler::handle_start_capture(const std::string& client_id, const std::vector<DataType>& types) {
-    auto it = sessions_.find(client_id);
-    if (it == sessions_.end() || !it->second.connected) {
-        return make_response(ResponseCode::NotReady, "Not connected");
+    {
+        std::lock_guard<std::mutex> lk(sessions_mutex_);
+        auto it = sessions_.find(client_id);
+        if (it == sessions_.end() || !it->second.connected) {
+            return make_response(ResponseCode::NotReady, "Not connected");
+        }
     }
     if (sdk_manager_) {
         std::vector<DataType> capture_types = types;
@@ -72,9 +77,12 @@ Response ClientHandler::handle_start_capture(const std::string& client_id, const
 }
 
 Response ClientHandler::handle_stop_capture(const std::string& client_id, const std::vector<DataType>& types) {
-    auto it = sessions_.find(client_id);
-    if (it == sessions_.end() || !it->second.connected) {
-        return make_response(ResponseCode::NotReady, "Not connected");
+    {
+        std::lock_guard<std::mutex> lk(sessions_mutex_);
+        auto it = sessions_.find(client_id);
+        if (it == sessions_.end() || !it->second.connected) {
+            return make_response(ResponseCode::NotReady, "Not connected");
+        }
     }
     if (sdk_manager_) {
         std::vector<DataType> capture_types = types;
@@ -94,8 +102,11 @@ Response ClientHandler::handle_stop_capture(const std::string& client_id, const 
 
 Response ClientHandler::handle_check_status(const std::string& client_id) {
     nlohmann::json detail;
-    detail["initialized"] = module_initialized_;
-    detail["sessions"] = sessions_.size();
+    detail["initialized"] = module_initialized_.load();
+    {
+        std::lock_guard<std::mutex> lk(sessions_mutex_);
+        detail["sessions"] = sessions_.size();
+    }
 
     // Camera status from SDKSlotManager
     if (sdk_manager_) {
@@ -146,9 +157,12 @@ Response ClientHandler::handle_check_status(const std::string& client_id) {
 }
 
 Response ClientHandler::handle_set_parameter(const std::string& client_id, const std::string& name, const ParameterValue& value) {
-    auto it = sessions_.find(client_id);
-    if (it == sessions_.end() || !it->second.connected) {
-        return make_response(ResponseCode::NotReady, "Not connected");
+    {
+        std::lock_guard<std::mutex> lk(sessions_mutex_);
+        auto it = sessions_.find(client_id);
+        if (it == sessions_.end() || !it->second.connected) {
+            return make_response(ResponseCode::NotReady, "Not connected");
+        }
     }
     if (!sdk_manager_) {
         return make_response(ResponseCode::Error, "No SDK manager");
@@ -176,9 +190,12 @@ Response ClientHandler::handle_set_parameter(const std::string& client_id, const
 }
 
 Response ClientHandler::handle_get_parameter(const std::string& client_id, const std::string& name) {
-    auto it = sessions_.find(client_id);
-    if (it == sessions_.end() || !it->second.connected) {
-        return make_response(ResponseCode::NotReady, "Not connected");
+    {
+        std::lock_guard<std::mutex> lk(sessions_mutex_);
+        auto it = sessions_.find(client_id);
+        if (it == sessions_.end() || !it->second.connected) {
+            return make_response(ResponseCode::NotReady, "Not connected");
+        }
     }
     if (!sdk_manager_) {
         return make_response(ResponseCode::Error, "No SDK manager");

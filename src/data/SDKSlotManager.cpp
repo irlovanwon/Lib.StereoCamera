@@ -179,13 +179,23 @@ void SDKSlotManager::start_all() {
 
 void SDKSlotManager::stop_all() {
     running_.store(false);
+    std::vector<std::unique_ptr<std::thread>> threads_to_join;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& [id, slot] : slots_) {
+            slot->capturing.store(false);
+            slot->subscriber_count = 0;
+            if (slot->dealer_thread && slot->dealer_thread->joinable()) {
+                threads_to_join.push_back(std::move(slot->dealer_thread));
+            }
+        }
+    }
+    // Join outside mutex to avoid deadlock with dealer_loop → capturing_active()
+    for (auto& t : threads_to_join) {
+        if (t && t->joinable()) t->join();
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& [id, slot] : slots_) {
-        slot->capturing.store(false);
-        slot->subscriber_count = 0;
-        if (slot->dealer_thread && slot->dealer_thread->joinable()) {
-            slot->dealer_thread->join();
-        }
         slot->client->disconnect();
         slot->client->dispose();
     }
