@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <openssl/ssl.h>
 #include <turbojpeg.h>
+#include <functional>
 
 namespace stereo_camera {
 
@@ -49,6 +50,9 @@ public:
     bool is_running() const;
     size_t client_count() const;
     uint32_t total_frames() const;
+
+    using DisconnectCallback = std::function<void()>;
+    void set_on_all_disconnected(DisconnectCallback cb) { on_all_disconnected_ = std::move(cb); }
 
 private:
     void accept_loop();
@@ -87,6 +91,9 @@ private:
 
     int jpeg_quality_ = 80;
     std::atomic<uint32_t> frame_count_{0};
+
+    DisconnectCallback on_all_disconnected_;
+    bool had_clients_ = false;
 };
 
 } // namespace stereo_camera

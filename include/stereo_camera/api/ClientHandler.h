@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <vector>
 
 namespace stereo_camera {
 
@@ -17,6 +18,8 @@ class WSServer;
 struct ClientSession {
     std::string id;
     bool connected = false;
+    std::vector<DataType> active_types;
+    std::string camera_id;
 };
 
 class ClientHandler {

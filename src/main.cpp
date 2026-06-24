@@ -123,6 +123,14 @@ int main(int argc, char* argv[]) {
     loopback.start();
     wss_server.start();
 
+    // Auto-cleanup: when all WebSocket clients disconnect, force-stop all captures
+    // to prevent orphaned subscriber counts and wasted CPU
+    wss_server.set_on_all_disconnected([&sdk_manager, &buffer2]() {
+        stereo_camera::Logger::instance().info("Main", "WS cleanup callback — force stopping all captures");
+        sdk_manager->force_stop_all_captures();
+        buffer2->clear();
+    });
+
     stereo_camera::Logger::instance().info("Main", "StereoCamera node started");
     stereo_camera::Logger::instance().info("Main", "API 3a HTTPS: " + cfg.api3.admin_server.host + ":" + std::to_string(cfg.api3.admin_server.port));
     stereo_camera::Logger::instance().info("Main", "API 2a HTTPS: " + cfg.api2.server.host + ":" + std::to_string(cfg.api2.server.port));

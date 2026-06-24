@@ -4,6 +4,7 @@
 #include "stereo_camera/data/WSServer.h"
 #include "stereo_camera/data/SDKSlotManager.h"
 #include "stereo_camera/common/Logger.h"
+#include <algorithm>
 
 namespace stereo_camera {
 
@@ -39,33 +40,53 @@ Response ClientHandler::handle_connect(const std::string& client_id) {
 }
 
 Response ClientHandler::handle_disconnect(const std::string& client_id) {
-    std::lock_guard<std::mutex> lk(sessions_mutex_);
-    auto it = sessions_.find(client_id);
-    if (it == sessions_.end() || !it->second.connected) {
-        return make_response(ResponseCode::NotReady, "Not connected");
-    }
-    it->second.connected = false;
-    Logger::instance().info("ClientHandler", "Disconnect: " + client_id);
-    return make_response(ResponseCode::Success, "Disconnected");
-}
-
-Response ClientHandler::handle_start_capture(const std::string& client_id, const std::vector<DataType>& types) {
+    std::vector<DataType> types_to_stop;
+    std::string cam_id;
     {
         std::lock_guard<std::mutex> lk(sessions_mutex_);
         auto it = sessions_.find(client_id);
         if (it == sessions_.end() || !it->second.connected) {
             return make_response(ResponseCode::NotReady, "Not connected");
         }
+        types_to_stop = it->second.active_types;
+        cam_id = it->second.camera_id;
+        it->second.connected = false;
+        it->second.active_types.clear();
     }
-    if (sdk_manager_) {
-        std::vector<DataType> capture_types = types;
+    if (sdk_manager_ && !types_to_stop.empty() && !cam_id.empty()) {
+        sdk_manager_->stop_capture(cam_id, types_to_stop);
+        Logger::instance().info("ClientHandler", "Disconnect cleanup: stopped " + std::to_string(types_to_stop.size()) + " types for " + client_id);
+    }
+    Logger::instance().info("ClientHandler", "Disconnect: " + client_id);
+    return make_response(ResponseCode::Success, "Disconnected");
+}
+
+Response ClientHandler::handle_start_capture(const std::string& client_id, const std::vector<DataType>& types) {
+    std::vector<DataType> capture_types = types;
+    {
+        std::lock_guard<std::mutex> lk(sessions_mutex_);
+        auto it = sessions_.find(client_id);
+        if (it == sessions_.end() || !it->second.connected) {
+            return make_response(ResponseCode::NotReady, "Not connected");
+        }
         if (capture_types.empty()) {
             capture_types = {DataType::StereoImage, DataType::IMU};
         }
+        for (const auto& t : capture_types) {
+            if (std::find(it->second.active_types.begin(), it->second.active_types.end(), t) == it->second.active_types.end()) {
+                it->second.active_types.push_back(t);
+            }
+        }
+    }
+    if (sdk_manager_) {
         std::string camera_id = "cam1";
         auto camera_ids = sdk_manager_->get_camera_ids();
         if (!camera_ids.empty()) {
             camera_id = camera_ids[0];
+        }
+        {
+            std::lock_guard<std::mutex> lk(sessions_mutex_);
+            sessions_[client_id].camera_id = camera_id;
         }
         bool ok = sdk_manager_->start_capture(camera_id, capture_types);
         if (!ok) {
@@ -77,18 +98,23 @@ Response ClientHandler::handle_start_capture(const std::string& client_id, const
 }
 
 Response ClientHandler::handle_stop_capture(const std::string& client_id, const std::vector<DataType>& types) {
+    std::vector<DataType> capture_types = types;
     {
         std::lock_guard<std::mutex> lk(sessions_mutex_);
         auto it = sessions_.find(client_id);
         if (it == sessions_.end() || !it->second.connected) {
             return make_response(ResponseCode::NotReady, "Not connected");
         }
-    }
-    if (sdk_manager_) {
-        std::vector<DataType> capture_types = types;
         if (capture_types.empty()) {
             capture_types = {DataType::StereoImage, DataType::IMU};
         }
+        for (const auto& t : capture_types) {
+            it->second.active_types.erase(
+                std::remove(it->second.active_types.begin(), it->second.active_types.end(), t),
+                it->second.active_types.end());
+        }
+    }
+    if (sdk_manager_) {
         std::string camera_id = "cam1";
         auto camera_ids = sdk_manager_->get_camera_ids();
         if (!camera_ids.empty()) {

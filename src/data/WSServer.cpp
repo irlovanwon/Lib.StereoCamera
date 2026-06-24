@@ -129,6 +129,15 @@ void WSServer::accept_loop() {
                     ++it;
                 }
             }
+
+            // Detect transition: had clients → no clients
+            if (had_clients_ && clients_.empty()) {
+                had_clients_ = false;
+                Logger::instance().info("WSServer", "All WebSocket clients disconnected — triggering cleanup");
+                if (on_all_disconnected_) {
+                    on_all_disconnected_();
+                }
+            }
         }
 
         struct timeval tv{1, 0};
@@ -160,6 +169,7 @@ void WSServer::accept_loop() {
         {
             std::lock_guard<std::mutex> lock(clients_mutex_);
             clients_.push_back(std::move(client));
+            had_clients_ = true;
             Logger::instance().info("WSServer", "Client connected (total=" + std::to_string(clients_.size()) + ")");
         }
 

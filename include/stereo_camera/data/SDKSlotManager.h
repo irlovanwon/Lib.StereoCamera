@@ -44,6 +44,7 @@ public:
 
     bool start_capture(const std::string& camera_id, const std::vector<DataType>& types);
     bool stop_capture(const std::string& camera_id, const std::vector<DataType>& types);
+    void force_stop_all_captures();
 
     std::shared_ptr<CameraSDKClient> get_client(const std::string& camera_id) const;
     std::vector<std::string> get_camera_ids() const;

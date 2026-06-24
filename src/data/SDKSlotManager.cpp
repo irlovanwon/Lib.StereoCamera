@@ -283,6 +283,45 @@ void SDKSlotManager::set_data_callback(DataReceivedCallback callback) {
     data_callback_ = std::move(callback);
 }
 
+void SDKSlotManager::force_stop_all_captures() {
+    std::vector<std::unique_ptr<std::thread>> threads_to_join;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& [id, slot] : slots_) {
+            if (!slot->capturing.load()) continue;
+
+            Logger::instance().info("SDKSlotManager", "Force stop capture for " + id +
+                " (subscriber_count was " + std::to_string(slot->subscriber_count) + ")");
+
+            slot->capturing.store(false);
+            slot->subscriber_count = 0;
+
+            std::vector<std::string> type_names = types_to_type_names(slot->active_types);
+            if (!type_names.empty()) {
+                slot->client->stop_capture_by_channels(type_names);
+                for (const auto& name : type_names) {
+                    slot->client->deactivate_channel(name);
+                }
+            }
+
+            slot->active_types.clear();
+            slot->active_channels.clear();
+
+            for (const auto& type : slot->active_types) {
+                buffer_->remove_slot(id, type);
+            }
+
+            if (slot->dealer_thread && slot->dealer_thread->joinable()) {
+                threads_to_join.push_back(std::move(slot->dealer_thread));
+            }
+        }
+    }
+    for (auto& t : threads_to_join) {
+        if (t && t->joinable()) t->join();
+    }
+    Logger::instance().info("SDKSlotManager", "Force stop all captures complete");
+}
+
 void SDKSlotManager::dealer_loop(const std::string& camera_id, std::unordered_map<std::string, std::string> channels) {
     void* context = shared_zmq_ctx_ ? shared_zmq_ctx_ : zmq_ctx_new();
     bool owns_ctx = (shared_zmq_ctx_ == nullptr);
