@@ -22,6 +22,14 @@ static std::vector<std::string> types_to_channels(const std::vector<DataType>& t
     return chans;
 }
 
+static std::vector<std::string> types_to_type_names(const std::vector<DataType>& types) {
+    std::vector<std::string> names;
+    for (auto t : types) {
+        names.push_back(data_type_to_channel(t));
+    }
+    return names;
+}
+
 
 
 SDKSlotManager::SDKSlotManager(std::shared_ptr<DataBuffer> buffer)
@@ -73,9 +81,25 @@ bool SDKSlotManager::start_capture(const std::string& camera_id, const std::vect
         }
     }
 
+    // Compute new type names for ZED API (individual types, not group names)
+    std::vector<DataType> previously_active;
+    for (const auto& t : slot->active_types) {
+        if (std::find(types.begin(), types.end(), t) == types.end()) {
+            previously_active.push_back(t);
+        }
+    }
+    std::vector<std::string> new_type_names;
+    for (const auto& type : types) {
+        bool is_new = true;
+        for (const auto& t : previously_active) {
+            if (t == type) { is_new = false; break; }
+        }
+        if (is_new) new_type_names.push_back(data_type_to_channel(type));
+    }
+
     if (!slot->capturing.load()) {
-        if (!channels_to_activate.empty()) {
-            auto resp = slot->client->start_capture_by_channels(channels_to_activate);
+        if (!new_type_names.empty()) {
+            auto resp = slot->client->start_capture_by_channels(new_type_names);
             if (resp.code != ResponseCode::Success && resp.code != ResponseCode::AlreadyInit) {
                 Logger::instance().warn("SDKSlotManager", "SDK StartCapture returned " + std::to_string(static_cast<int>(resp.code)) + " for " + camera_id + ", continuing with dealer thread");
             }
@@ -93,16 +117,16 @@ bool SDKSlotManager::start_capture(const std::string& camera_id, const std::vect
         slot->dealer_thread = std::make_unique<std::thread>(&SDKSlotManager::dealer_loop, this, camera_id, chans);
         Logger::instance().info("SDKSlotManager", "Dealer thread started for " + camera_id);
     } else {
-        if (!channels_to_activate.empty()) {
-            auto resp = slot->client->start_capture_by_channels(channels_to_activate);
+        if (!new_type_names.empty()) {
+            auto resp = slot->client->start_capture_by_channels(new_type_names);
             if (resp.code != ResponseCode::Success && resp.code != ResponseCode::AlreadyInit) {
                 Logger::instance().warn("SDKSlotManager", "SDK StartCapture (additional) returned " + std::to_string(static_cast<int>(resp.code)) + " for " + camera_id);
             }
-            for (const auto& ch : channels_to_activate) {
-                slot->active_channels.push_back(ch);
-            }
-            Logger::instance().info("SDKSlotManager", "Additional channels activated for " + camera_id + ": " +
-                std::to_string(channels_to_activate.size()));
+            Logger::instance().info("SDKSlotManager", "Additional types activated for " + camera_id + ": " +
+                std::to_string(new_type_names.size()));
+        }
+        for (const auto& ch : channels_to_activate) {
+            slot->active_channels.push_back(ch);
         }
     }
 
@@ -141,13 +165,20 @@ bool SDKSlotManager::stop_capture(const std::string& camera_id, const std::vecto
             buffer_->remove_slot(camera_id, type);
         }
 
-        // Send stop_capture for channels no longer needed, even if other subscribers remain
+        // Send stop_capture for individual types to ZED (not group names)
+        std::vector<std::string> stopped_type_names = types_to_type_names(types);
+        if (!stopped_type_names.empty() && slot->capturing.load()) {
+            slot->client->stop_capture_by_channels(stopped_type_names);
+            for (const auto& name : stopped_type_names) {
+                slot->client->deactivate_channel(name);
+            }
+            Logger::instance().info("SDKSlotManager", "Stopped types on ZED for " + camera_id + ": " +
+                std::to_string(stopped_type_names.size()));
+        }
+
+        // Deactivate ZMQ endpoints for channels no longer needed
         if (!channels_to_deactivate.empty() && slot->capturing.load()) {
             for (const auto& ch : channels_to_deactivate) {
-                if (slot->channels.count(ch)) {
-                    slot->client->stop_capture_by_channels({ch});
-                    slot->client->deactivate_channel(ch);
-                }
                 slot->active_channels.erase(
                     std::remove(slot->active_channels.begin(), slot->active_channels.end(), ch),
                     slot->active_channels.end());
