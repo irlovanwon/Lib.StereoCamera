@@ -141,7 +141,8 @@ bool SDKSlotManager::stop_capture(const std::string& camera_id, const std::vecto
             buffer_->remove_slot(camera_id, type);
         }
 
-        if (slot->subscriber_count <= 0 && slot->capturing.load()) {
+        // Send stop_capture for channels no longer needed, even if other subscribers remain
+        if (!channels_to_deactivate.empty() && slot->capturing.load()) {
             for (const auto& ch : channels_to_deactivate) {
                 if (slot->channels.count(ch)) {
                     slot->client->stop_capture_by_channels({ch});
@@ -151,7 +152,11 @@ bool SDKSlotManager::stop_capture(const std::string& camera_id, const std::vecto
                     std::remove(slot->active_channels.begin(), slot->active_channels.end(), ch),
                     slot->active_channels.end());
             }
+            Logger::instance().info("SDKSlotManager", "Deactivated " + std::to_string(channels_to_deactivate.size()) + " channels for " + camera_id);
+        }
 
+        // Only stop dealer thread when all subscribers gone
+        if (slot->subscriber_count <= 0 && slot->capturing.load()) {
             slot->capturing.store(false);
             thread_to_join = std::move(slot->dealer_thread);
             Logger::instance().info("SDKSlotManager", "Dealer thread stopping for " + camera_id);
