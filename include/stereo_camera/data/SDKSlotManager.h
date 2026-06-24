@@ -25,6 +25,7 @@ struct SDKSlot {
     std::atomic<bool> capturing{false};
     int subscriber_count = 0;
     std::vector<DataType> active_types;
+    std::vector<std::string> active_channels;
 };
 
 struct CameraSDKConfig {

@@ -9,10 +9,17 @@
 #include <unordered_set>
 #include <vector>
 #include <mutex>
+#include <deque>
+#include <condition_variable>
 #include <openssl/ssl.h>
 #include <turbojpeg.h>
 
 namespace stereo_camera {
+
+struct SendItem {
+    DataType type;
+    std::shared_ptr<DataBundle> bundle;
+};
 
 struct WSSClient {
     SSL* ssl = nullptr;
@@ -22,6 +29,12 @@ struct WSSClient {
     std::atomic<bool> active{true};
     std::unordered_map<std::string, const void*> last_sent;
     std::unique_ptr<std::thread> loop_thread;
+
+    std::deque<SendItem> send_queue;
+    std::mutex send_queue_mutex;
+    std::condition_variable send_queue_cv;
+    std::unique_ptr<std::thread> send_thread;
+    std::atomic<bool> send_running{false};
 };
 
 class WSServer {
@@ -40,6 +53,7 @@ public:
 private:
     void accept_loop();
     void client_loop(WSSClient* session);
+    void send_loop(WSSClient* session);
     void encode_loop();
 
     bool ws_handshake(SSL* ssl);

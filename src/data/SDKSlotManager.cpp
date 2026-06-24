@@ -2,6 +2,7 @@
 #include "stereo_camera/common/Logger.h"
 #include <zmq.h>
 #include <cstring>
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 namespace stereo_camera {
@@ -53,21 +54,34 @@ bool SDKSlotManager::start_capture(const std::string& camera_id, const std::vect
 
     auto& slot = it->second;
     slot->subscriber_count++;
-    slot->active_types = types;
+
+    for (const auto& type : types) {
+        if (std::find(slot->active_types.begin(), slot->active_types.end(), type) == slot->active_types.end()) {
+            slot->active_types.push_back(type);
+        }
+    }
 
     for (const auto& type : types) {
         buffer_->create_slot(camera_id, type);
     }
 
-    if (!slot->capturing.load()) {
-        std::vector<std::string> chan_names;
-        for (const auto& cn : types_to_channels(types)) {
-            chan_names.push_back(cn);
+    std::vector<std::string> requested_channels = types_to_channels(types);
+    std::vector<std::string> channels_to_activate;
+    for (const auto& ch : requested_channels) {
+        if (std::find(slot->active_channels.begin(), slot->active_channels.end(), ch) == slot->active_channels.end()) {
+            channels_to_activate.push_back(ch);
         }
+    }
 
-        auto resp = slot->client->start_capture_by_channels(chan_names);
-        if (resp.code != ResponseCode::Success && resp.code != ResponseCode::AlreadyInit) {
-            Logger::instance().warn("SDKSlotManager", "SDK StartCapture returned " + std::to_string(static_cast<int>(resp.code)) + " for " + camera_id + ", continuing with dealer thread");
+    if (!slot->capturing.load()) {
+        if (!channels_to_activate.empty()) {
+            auto resp = slot->client->start_capture_by_channels(channels_to_activate);
+            if (resp.code != ResponseCode::Success && resp.code != ResponseCode::AlreadyInit) {
+                Logger::instance().warn("SDKSlotManager", "SDK StartCapture returned " + std::to_string(static_cast<int>(resp.code)) + " for " + camera_id + ", continuing with dealer thread");
+            }
+        }
+        for (const auto& ch : channels_to_activate) {
+            slot->active_channels.push_back(ch);
         }
 
         slot->capturing.store(true);
@@ -78,6 +92,18 @@ bool SDKSlotManager::start_capture(const std::string& camera_id, const std::vect
         }
         slot->dealer_thread = std::make_unique<std::thread>(&SDKSlotManager::dealer_loop, this, camera_id, chans);
         Logger::instance().info("SDKSlotManager", "Dealer thread started for " + camera_id);
+    } else {
+        if (!channels_to_activate.empty()) {
+            auto resp = slot->client->start_capture_by_channels(channels_to_activate);
+            if (resp.code != ResponseCode::Success && resp.code != ResponseCode::AlreadyInit) {
+                Logger::instance().warn("SDKSlotManager", "SDK StartCapture (additional) returned " + std::to_string(static_cast<int>(resp.code)) + " for " + camera_id);
+            }
+            for (const auto& ch : channels_to_activate) {
+                slot->active_channels.push_back(ch);
+            }
+            Logger::instance().info("SDKSlotManager", "Additional channels activated for " + camera_id + ": " +
+                std::to_string(channels_to_activate.size()));
+        }
     }
 
     Logger::instance().info("SDKSlotManager", "Capture started for " + camera_id + " subscribers=" + std::to_string(slot->subscriber_count));
@@ -96,22 +122,38 @@ bool SDKSlotManager::stop_capture(const std::string& camera_id, const std::vecto
             slot->subscriber_count--;
         }
 
+        for (const auto& type : types) {
+            slot->active_types.erase(
+                std::remove(slot->active_types.begin(), slot->active_types.end(), type),
+                slot->active_types.end());
+        }
+
+        std::vector<std::string> stopped_channels = types_to_channels(types);
+        std::vector<std::string> remaining_channels = types_to_channels(slot->active_types);
+        std::vector<std::string> channels_to_deactivate;
+        for (const auto& ch : stopped_channels) {
+            if (std::find(remaining_channels.begin(), remaining_channels.end(), ch) == remaining_channels.end()) {
+                channels_to_deactivate.push_back(ch);
+            }
+        }
+
+        for (const auto& type : types) {
+            buffer_->remove_slot(camera_id, type);
+        }
+
         if (slot->subscriber_count <= 0 && slot->capturing.load()) {
+            for (const auto& ch : channels_to_deactivate) {
+                if (slot->channels.count(ch)) {
+                    slot->client->stop_capture_by_channels({ch});
+                    slot->client->deactivate_channel(ch);
+                }
+                slot->active_channels.erase(
+                    std::remove(slot->active_channels.begin(), slot->active_channels.end(), ch),
+                    slot->active_channels.end());
+            }
+
             slot->capturing.store(false);
             thread_to_join = std::move(slot->dealer_thread);
-            std::vector<std::string> chan_names;
-            for (const auto& cn : types_to_channels(types)) {
-                if (slot->channels.count(cn)) {
-                    chan_names.push_back(cn);
-                }
-            }
-            slot->client->stop_capture_by_channels(chan_names);
-            for (const auto& cn : chan_names) {
-                slot->client->deactivate_channel(cn);
-            }
-            for (const auto& type : types) {
-                buffer_->remove_slot(camera_id, type);
-            }
             Logger::instance().info("SDKSlotManager", "Dealer thread stopping for " + camera_id);
         }
 

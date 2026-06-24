@@ -76,6 +76,9 @@ void WSServer::stop() {
         std::lock_guard<std::mutex> lock(clients_mutex_);
         for (auto& c : clients_) {
             c->active.store(false);
+            c->send_running.store(false);
+            c->send_queue_cv.notify_all();
+            if (c->send_thread && c->send_thread->joinable()) c->send_thread->join();
             if (c->loop_thread && c->loop_thread->joinable()) c->loop_thread->join();
             if (c->ssl) { SSL_shutdown(c->ssl); SSL_free(c->ssl); c->ssl = nullptr; }
         }
@@ -106,8 +109,21 @@ void WSServer::accept_loop() {
             std::lock_guard<std::mutex> lock(clients_mutex_);
             for (auto it = clients_.begin(); it != clients_.end();) {
                 if (!(*it)->active.load()) {
+                    (*it)->send_running.store(false);
+                    (*it)->send_queue_cv.notify_all();
+                    if ((*it)->send_thread && (*it)->send_thread->joinable())
+                        (*it)->send_thread->join();
                     if ((*it)->loop_thread && (*it)->loop_thread->joinable())
                         (*it)->loop_thread->join();
+                    if ((*it)->ssl) {
+                        SSL_shutdown((*it)->ssl);
+                        SSL_free((*it)->ssl);
+                        (*it)->ssl = nullptr;
+                    }
+                    if ((*it)->fd >= 0) {
+                        close((*it)->fd);
+                        (*it)->fd = -1;
+                    }
                     it = clients_.erase(it);
                 } else {
                     ++it;
@@ -148,6 +164,8 @@ void WSServer::accept_loop() {
         }
 
         raw->loop_thread = std::make_unique<std::thread>(&WSServer::client_loop, this, raw);
+        raw->send_running.store(true);
+        raw->send_thread = std::make_unique<std::thread>(&WSServer::send_loop, this, raw);
     }
 }
 
@@ -178,26 +196,38 @@ bool WSServer::ws_handshake(SSL* ssl) {
 }
 
 bool WSServer::ws_send_binary(SSL* ssl, const uint8_t* data, size_t len) {
-    std::vector<uint8_t> frame;
-    frame.push_back(0x82);
+    uint8_t hdr[10];
+    int hdr_len = 0;
+    hdr[0] = 0x82;
     if (len < 126) {
-        frame.push_back(static_cast<uint8_t>(len));
+        hdr[1] = static_cast<uint8_t>(len);
+        hdr_len = 2;
     } else if (len < 65536) {
-        frame.push_back(126);
-        frame.push_back((len >> 8) & 0xFF);
-        frame.push_back(len & 0xFF);
+        hdr[1] = 126;
+        hdr[2] = (len >> 8) & 0xFF;
+        hdr[3] = len & 0xFF;
+        hdr_len = 4;
     } else {
-        frame.push_back(127);
+        hdr[1] = 127;
         for (int i = 7; i >= 0; --i)
-            frame.push_back((len >> (i * 8)) & 0xFF);
+            hdr[2 + (7 - i)] = (len >> (i * 8)) & 0xFF;
+        hdr_len = 10;
     }
-    frame.insert(frame.end(), data, data + len);
 
-    int total_sent = 0;
-    while (total_sent < (int)frame.size()) {
-        int n = SSL_write(ssl, frame.data() + total_sent, frame.size() - total_sent);
+    int sent = 0;
+    while (sent < hdr_len) {
+        int n = SSL_write(ssl, hdr + sent, hdr_len - sent);
         if (n <= 0) return false;
-        total_sent += n;
+        sent += n;
+    }
+
+    const size_t CHUNK = 16384;
+    size_t total = 0;
+    while (total < len) {
+        size_t chunk = std::min(CHUNK, len - total);
+        int n = SSL_write(ssl, data + total, chunk);
+        if (n <= 0) return false;
+        total += n;
     }
     return true;
 }
@@ -348,7 +378,12 @@ void WSServer::client_loop(WSSClient* session) {
         if (rc > 0 && FD_ISSET(session->fd, &rfds)) {
             uint8_t opcode;
             std::vector<uint8_t> payload;
-            if (!ws_read_frame(session->ssl, opcode, payload)) break;
+            bool ok;
+            {
+                std::lock_guard<std::mutex> lk(session->send_mutex);
+                ok = ws_read_frame(session->ssl, opcode, payload);
+            }
+            if (!ok) break;
             if (opcode == 0x8) break;
             if (opcode == 0x1 && !payload.empty()) {
                 std::string msg(payload.begin(), payload.end());
@@ -403,21 +438,22 @@ void WSServer::client_loop(WSSClient* session) {
             if (session->last_sent[key] == bundle.get()) continue;
             session->last_sent[key] = bundle.get();
 
-            send_to_one(session, slot.type, bundle);
+            {
+                std::lock_guard<std::mutex> slk(session->send_queue_mutex);
+                for (auto qit = session->send_queue.begin(); qit != session->send_queue.end(); ) {
+                    if (qit->type == slot.type) qit = session->send_queue.erase(qit);
+                    else ++qit;
+                }
+                session->send_queue.push_back({slot.type, bundle});
+            }
+            session->send_queue_cv.notify_one();
             frame_count_.fetch_add(1);
         }
     }
 
     session->active.store(false);
-    if (session->ssl) {
-        SSL_shutdown(session->ssl);
-        SSL_free(session->ssl);
-        session->ssl = nullptr;
-    }
-    if (session->fd >= 0) {
-        close(session->fd);
-        session->fd = -1;
-    }
+    session->send_running.store(false);
+    session->send_queue_cv.notify_all();
     Logger::instance().info("WSServer", "Client disconnected (cleanup deferred to accept_loop)");
 
     if (frame_count_.load() % 500 == 0 && frame_count_.load() > 0) {
@@ -426,6 +462,23 @@ void WSServer::client_loop(WSSClient* session) {
             "Sent " + std::to_string(frame_count_.load()) + " frames, " +
             std::to_string(clients_.size()) + " clients");
     }
+}
+
+void WSServer::send_loop(WSSClient* session) {
+    Logger::instance().info("WSServer", "Send loop started");
+    while (session->send_running.load() && session->active.load()) {
+        SendItem item;
+        {
+            std::unique_lock<std::mutex> lk(session->send_queue_mutex);
+            session->send_queue_cv.wait_for(lk, std::chrono::milliseconds(100),
+                [&] { return !session->send_queue.empty() || !session->send_running.load(); });
+            if (session->send_queue.empty()) continue;
+            item = session->send_queue.front();
+            session->send_queue.pop_front();
+        }
+        send_to_one(session, item.type, item.bundle);
+    }
+    Logger::instance().info("WSServer", "Send loop exited");
 }
 
 } // namespace stereo_camera
