@@ -59,6 +59,7 @@ public:
     // Drop-NEWEST: returns silently if the queue is full.
     void push_encode(DataGroup group, const ChannelFrame& frame);
     void set_encode_queue_depth(size_t depth);
+    void broadcast(const std::string& message);
 
 private:
     void accept_loop();

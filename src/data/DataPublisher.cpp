@@ -54,6 +54,14 @@ void DataPublisher::stop() {
 bool DataPublisher::is_running() const { return running_.load(); }
 void DataPublisher::notify_new_data() { pipeline_->notify(); }
 
+void DataPublisher::publish_shutdown() {
+    std::string msg = R"({"event":"server_shutdown","message":"Service restarting"})";
+    std::lock_guard<std::mutex> lock(sockets_mutex_);
+    for (auto& [channel, sock] : zmq_sockets_) {
+        zmq_send(sock, msg.c_str(), msg.size(), ZMQ_DONTWAIT);
+    }
+}
+
 void DataPublisher::publish_group(const std::string& channel, void* sock, ChannelFrame& frame) {
     if (frame.bundles.empty()) return;
 

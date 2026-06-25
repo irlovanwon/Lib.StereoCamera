@@ -102,6 +102,34 @@ void WSServer::stop() {
     Logger::instance().info("WSServer", "Stopped");
 }
 
+void WSServer::broadcast(const std::string& message) {
+    std::lock_guard<std::mutex> lk(clients_mutex_);
+    size_t payload_len = message.size();
+    for (auto& c : clients_) {
+        if (!c->active.load() || !c->ssl) continue;
+        uint8_t hdr[10];
+        size_t hdr_len = 0;
+        hdr[0] = 0x81; // FIN + text opcode
+        if (payload_len < 126) {
+            hdr[1] = static_cast<uint8_t>(payload_len);
+            hdr_len = 2;
+        } else if (payload_len < 65536) {
+            hdr[1] = 126;
+            hdr[2] = (payload_len >> 8) & 0xFF;
+            hdr[3] = payload_len & 0xFF;
+            hdr_len = 4;
+        } else {
+            hdr[1] = 127;
+            for (int i = 7; i >= 0; --i)
+                hdr[2 + (7 - i)] = (payload_len >> (i * 8)) & 0xFF;
+            hdr_len = 10;
+        }
+        std::lock_guard<std::mutex> slk(c->send_mutex);
+        SSL_write(c->ssl, hdr, hdr_len);
+        SSL_write(c->ssl, message.c_str(), message.size());
+    }
+}
+
 
 size_t WSServer::client_count() const {
     std::lock_guard<std::mutex> lock(clients_mutex_);

@@ -23,6 +23,7 @@ public:
     bool is_running() const;
     void set_zmq_context(void* ctx) { shared_ctx_ = ctx; }
     void notify_new_data();
+    void publish_shutdown();
 
 private:
     void pub_loop();
