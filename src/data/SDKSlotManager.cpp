@@ -118,6 +118,7 @@ bool SDKSlotManager::start_capture(const std::string& camera_id, const std::vect
         Logger::instance().info("SDKSlotManager", "Dealer thread started for " + camera_id);
     } else {
         if (!new_type_names.empty()) {
+            slot->client->connect();
             auto resp = slot->client->start_capture_by_channels(new_type_names);
             if (resp.code != ResponseCode::Success && resp.code != ResponseCode::AlreadyInit) {
                 Logger::instance().warn("SDKSlotManager", "SDK StartCapture (additional) returned " + std::to_string(static_cast<int>(resp.code)) + " for " + camera_id);
