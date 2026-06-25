@@ -91,13 +91,24 @@ void LoopbackSubscriber::sub_loop() {
                 ts.sec = hdr.value("ts_sec", (int64_t)0);
                 ts.nsec = hdr.value("ts_nsec", (int64_t)0);
 
+                ChannelFrame frame;
+                frame.camera_id = hdr.value("camera_id", "default");
+                frame.timestamp = ts;
+
                 for (size_t j = 0; j < parts_arr.size() && j + 2 < zparts.size(); j++) {
                     std::string id = parts_arr[j].value("id", "");
                     auto b = std::make_shared<DataBundle>();
                     b->type = channel_to_type(id);
                     b->payload = zparts[j + 2];
                     b->timestamp = ts;
-                    buffer_->push(hdr.value("camera_id", "default"), b);
+                    buffer_->push(frame.camera_id, b);
+                    frame.bundles.push_back(b);
+                }
+
+                // Feed the API3 encode SPSC queues (drop-newest) in addition to
+                // the DataBuffer, so encode_loop runs CV-driven instead of polling.
+                if (encode_callback_ && !frame.bundles.empty()) {
+                    encode_callback_(data_type_to_group(frame.bundles[0]->type), frame);
                 }
                 total_frames_.fetch_add(1);
                 if (total_frames_.load() % 1000 == 0) {

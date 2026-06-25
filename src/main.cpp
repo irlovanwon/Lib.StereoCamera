@@ -87,11 +87,19 @@ int main(int argc, char* argv[]) {
     std::string cert_path = api3_cert.empty() ? config_dir + "/server.crt" : api3_cert;
     std::string key_path = api3_key.empty() ? config_dir + "/server.key" : api3_key;
 
-    // WSServer — reads from DataBuffer #2
+    // WSServer — reads from DataBuffer #2 + 3 encode SPSC queues
     stereo_camera::WSServer wss_server(buffer2,
         cfg.api3.data.wss_server.host,
         static_cast<uint16_t>(cfg.api3.data.wss_server.port),
         cert_path, key_path);
+    wss_server.set_encode_queue_depth(qs);
+
+    // Feed the WSServer encode SPSC queues directly from the loopback thread
+    // (replaces the encode_loop's 10ms DataBuffer polling).
+    loopback.set_encode_callback(
+        [&wss_server](stereo_camera::DataGroup g, const stereo_camera::ChannelFrame& f) {
+            wss_server.push_encode(g, f);
+        });
 
     auto client_handler = std::make_shared<stereo_camera::ClientHandler>();
     client_handler->set_sdk_manager(sdk_manager);

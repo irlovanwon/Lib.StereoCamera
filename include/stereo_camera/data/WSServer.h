@@ -1,6 +1,7 @@
 #pragma once
 
 #include "stereo_camera/data/DataBuffer.h"
+#include "stereo_camera/data/SPSCQueue.h"
 #include <string>
 #include <thread>
 #include <atomic>
@@ -54,11 +55,17 @@ public:
     using DisconnectCallback = std::function<void()>;
     void set_on_all_disconnected(DisconnectCallback cb) { on_all_disconnected_ = std::move(cb); }
 
+    // SPSC-fed encode path (3 queues, one per data group).
+    // Drop-NEWEST: returns silently if the queue is full.
+    void push_encode(DataGroup group, const ChannelFrame& frame);
+    void set_encode_queue_depth(size_t depth);
+
 private:
     void accept_loop();
     void client_loop(WSSClient* session);
     void send_loop(WSSClient* session);
     void encode_loop();
+    bool has_encode_data() const;
 
     bool ws_handshake(SSL* ssl);
     bool ws_send_binary(SSL* ssl, const uint8_t* data, size_t len);
@@ -88,6 +95,14 @@ private:
     std::mutex encoded_mutex_;
     std::unordered_map<std::string, std::shared_ptr<DataBundle>> encoded_stereo_;
     const void* last_encoded_ptr_ = nullptr;
+
+    // SPSC encode queues (fed by LoopbackSubscriber) + CV-driven encode loop.
+    // Same type/width as the API2 DataPipeline queues.
+    SPSCQueue<ChannelFrame, 16> encode_queue_2d_;
+    SPSCQueue<ChannelFrame, 16> encode_queue_3d_;
+    SPSCQueue<ChannelFrame, 16> encode_queue_sensor_;
+    std::mutex encode_mutex_;
+    std::condition_variable encode_cv_;
 
     int jpeg_quality_ = 80;
     std::atomic<uint32_t> frame_count_{0};

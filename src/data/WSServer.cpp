@@ -81,6 +81,8 @@ void WSServer::start() {
 void WSServer::stop() {
     running_.store(false);
     if (listen_fd_ >= 0) { close(listen_fd_); listen_fd_ = -1; }
+    // Wake the CV-driven encode loop so it can observe !running_ and exit.
+    encode_cv_.notify_all();
     if (accept_thread_ && accept_thread_->joinable()) accept_thread_->join();
     if (encode_thread_ && encode_thread_->joinable()) encode_thread_->join();
 
@@ -357,31 +359,71 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
     return true;
 }
 
+void WSServer::push_encode(DataGroup group, const ChannelFrame& frame) {
+    bool pushed = false;
+    switch (group) {
+        case DataGroup::VisualGeometric2D: pushed = encode_queue_2d_.try_push(frame); break;
+        case DataGroup::VisualGeometric3D: pushed = encode_queue_3d_.try_push(frame); break;
+        case DataGroup::SensorTracking:    pushed = encode_queue_sensor_.try_push(frame); break;
+    }
+    if (pushed) {
+        std::lock_guard<std::mutex> lk(encode_mutex_);
+        encode_cv_.notify_one();
+    }
+}
+
+void WSServer::set_encode_queue_depth(size_t depth) {
+    encode_queue_2d_.set_max_depth(depth);
+    encode_queue_3d_.set_max_depth(depth);
+    encode_queue_sensor_.set_max_depth(depth);
+}
+
+bool WSServer::has_encode_data() const {
+    return !encode_queue_2d_.empty() ||
+           !encode_queue_3d_.empty() ||
+           !encode_queue_sensor_.empty();
+}
+
 void WSServer::encode_loop() {
-    Logger::instance().info("WSServer", "Encode loop started (polls DataBuffer, caches encoded)");
+    Logger::instance().info("WSServer", "Encode loop started (SPSC-fed, CV-driven)");
 
     while (running_.load()) {
-        auto slots = buffer_->active_slots();
-        for (const auto& slot : slots) {
-            if (slot.type != DataType::StereoImage) continue;
-            auto bundle = buffer_->get_latest(slot.camera_id, slot.type);
-            if (!bundle || bundle->payload.empty()) continue;
-            if (bundle.get() == last_encoded_ptr_) continue;
-            last_encoded_ptr_ = bundle.get();
+        bool got_data = false;
 
-            std::vector<uint8_t> encoded;
-            if (encode_stereo_image(bundle->payload, encoded)) {
-                auto out = std::make_shared<DataBundle>();
-                out->timestamp = bundle->timestamp;
-                out->type = bundle->type;
-                out->payload = std::move(encoded);
-                {
-                    std::lock_guard<std::mutex> lk(encoded_mutex_);
-                    encoded_stereo_[slot.camera_id] = std::move(out);
+        // 2D group: encode StereoImage bundles (DepthMap/2D pass through unencoded for now)
+        ChannelFrame frame2d;
+        while (encode_queue_2d_.pop(frame2d)) {
+            got_data = true;
+            for (const auto& bundle : frame2d.bundles) {
+                if (!bundle || bundle->type != DataType::StereoImage) continue;
+                if (bundle->payload.empty()) continue;
+                if (bundle.get() == last_encoded_ptr_) continue;
+                last_encoded_ptr_ = bundle.get();
+
+                std::vector<uint8_t> encoded;
+                if (encode_stereo_image(bundle->payload, encoded)) {
+                    auto out = std::make_shared<DataBundle>();
+                    out->timestamp = bundle->timestamp;
+                    out->type = bundle->type;
+                    out->payload = std::move(encoded);
+                    {
+                        std::lock_guard<std::mutex> lk(encoded_mutex_);
+                        encoded_stereo_[frame2d.camera_id] = std::move(out);
+                    }
                 }
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        // 3D & sensor: no encoding needed yet — drain to avoid queue buildup.
+        ChannelFrame tmp;
+        while (encode_queue_3d_.pop(tmp)) { got_data = true; }
+        while (encode_queue_sensor_.pop(tmp)) { got_data = true; }
+
+        if (!got_data) {
+            std::unique_lock<std::mutex> lk(encode_mutex_);
+            encode_cv_.wait_for(lk, std::chrono::milliseconds(100),
+                [this] { return !running_.load() || has_encode_data(); });
+        }
     }
     Logger::instance().info("WSServer", "Encode loop exited");
 }
