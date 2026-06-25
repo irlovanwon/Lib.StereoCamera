@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <atomic>
 #include <thread>
 #include <sstream>
 #include <algorithm>
@@ -48,11 +49,12 @@ struct AdminServer::Impl {
     std::shared_ptr<ClientHandler> handler;
     std::shared_ptr<ParameterManager> param_mgr;
     int server_fd = -1;
-    bool running = false;
+    std::atomic<bool> running{false};
     int worker_count = 4;
 
     // Worker pool
     std::vector<std::thread> workers;
+    std::thread accept_thread_;
     std::queue<std::pair<SSL*, int>> pending;
     std::mutex queue_mutex;
     std::condition_variable queue_cv;
@@ -191,7 +193,7 @@ struct AdminServer::Impl {
             workers.emplace_back(&Impl::worker_loop, this);
 
         // Accept thread
-        std::thread([this]() {
+        accept_thread_ = std::thread([this]() {
             while (running) {
                 struct sockaddr_in client_addr{};
                 socklen_t client_len = sizeof(client_addr);
@@ -212,7 +214,7 @@ struct AdminServer::Impl {
                 }
                 queue_cv.notify_one();
             }
-        }).detach();
+        });
     }
 
     nlohmann::json route(const std::string& cmd, const std::string& body) {
@@ -251,9 +253,9 @@ struct AdminServer::Impl {
             ParameterValue pv;
             if (j.contains("value")) {
                 auto& v = j["value"];
-                if (v.is_number_integer()) pv.int_val = v.get<int>();
-                else if (v.is_number_float()) pv.float_val = v.get<double>();
-                else if (v.is_string()) pv.enum_val = v.get<std::string>();
+                if (v.is_number_integer()) { pv.int_val = v.get<int>(); pv.type = ParameterType::Integer; }
+                else if (v.is_number_float()) { pv.float_val = v.get<double>(); pv.type = ParameterType::Float; }
+                else if (v.is_string()) { pv.enum_val = v.get<std::string>(); pv.type = ParameterType::Enum; }
             }
             resp = handler->handle_set_parameter(client_id, pname, pv);
         }
@@ -274,6 +276,7 @@ struct AdminServer::Impl {
             close(server_fd);
             server_fd = -1;
         }
+        if (accept_thread_.joinable()) accept_thread_.join();
         queue_cv.notify_all();
         for (auto& w : workers)
             if (w.joinable()) w.join();

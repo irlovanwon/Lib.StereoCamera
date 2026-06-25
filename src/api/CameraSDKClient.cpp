@@ -8,23 +8,18 @@ namespace stereo_camera {
 struct CameraSDKClient::Impl {
     std::string base_url;
     std::function<void(const DataBundle&)> data_callback;
-    CURL* curl = nullptr;
 
-    Impl(const std::string& url) : base_url(url) {
-        curl = curl_easy_init();
-    }
-
-    ~Impl() {
-        if (curl) curl_easy_cleanup(curl);
-    }
+    Impl(const std::string& url) : base_url(url) {}
 
     Response http_post(const std::string& endpoint, const nlohmann::json& body = {}) {
-        if (!curl) return make_response(ResponseCode::Error, "CURL not initialized");
-
         std::string url = base_url + endpoint;
         std::string json_str = body.dump();
 
-        curl_easy_reset(curl);
+        // SC-H1: Create a fresh CURL* per call — libcurl handles are not
+        // thread-safe and multiple AdminServer workers may call concurrently.
+        CURL* curl = curl_easy_init();
+        if (!curl) return make_response(ResponseCode::Error, "CURL not initialized");
+
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str.c_str());
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -46,17 +41,21 @@ struct CameraSDKClient::Impl {
         CURLcode res = curl_easy_perform(curl);
         curl_slist_free_all(headers);
 
+        Response result;
         if (res != CURLE_OK) {
-            return make_response(ResponseCode::Error, curl_easy_strerror(res));
+            result = make_response(ResponseCode::Error, curl_easy_strerror(res));
+        } else {
+            try {
+                auto resp_json = nlohmann::json::parse(response_data);
+                ResponseCode code = static_cast<ResponseCode>(resp_json.value("code", 1));
+                result = make_response(code, resp_json.value("message", ""), resp_json.value("detail", nlohmann::json::object()));
+            } catch (const std::exception& e) {
+                result = make_response(ResponseCode::Error, std::string("Parse error: ") + e.what());
+            }
         }
 
-        try {
-            auto resp_json = nlohmann::json::parse(response_data);
-            ResponseCode code = static_cast<ResponseCode>(resp_json.value("code", 1));
-            return make_response(code, resp_json.value("message", ""), resp_json.value("detail", nlohmann::json::object()));
-        } catch (const std::exception& e) {
-            return make_response(ResponseCode::Error, std::string("Parse error: ") + e.what());
-        }
+        curl_easy_cleanup(curl);
+        return result;
     }
 };
 
@@ -140,9 +139,9 @@ Response CameraSDKClient::set_parameter(const std::string& name, const Parameter
     nlohmann::json j;
     j["command"] = "set_parameter";
     j["name"] = name;
-    if (!value.enum_val.empty()) {
+    if (value.type == ParameterType::Enum) {
         j["value"] = value.enum_val;
-    } else if (value.float_val != 0.0) {
+    } else if (value.type == ParameterType::Float) {
         j["value"] = value.float_val;
     } else {
         j["value"] = value.int_val;

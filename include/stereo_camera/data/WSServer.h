@@ -81,7 +81,7 @@ private:
     std::unique_ptr<std::thread> accept_thread_;
     std::unique_ptr<std::thread> encode_thread_;
 
-    std::mutex clients_mutex_;
+    mutable std::mutex clients_mutex_;
     std::vector<std::unique_ptr<WSSClient>> clients_;
 
     // Encoded stereo cache (encode once, all clients read)

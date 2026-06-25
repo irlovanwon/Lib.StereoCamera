@@ -26,6 +26,18 @@ static std::string base64_encode(const uint8_t* data, size_t len) {
     return result;
 }
 
+// SC-H3: SSL_read may return fewer bytes than requested on TLS; loop until the
+// full frame header/mask is read to avoid parsing uninitialized bytes.
+static int ssl_read_full(SSL* ssl, void* buf, int len) {
+    int total = 0;
+    while (total < len) {
+        int n = SSL_read(ssl, (char*)buf + total, len - total);
+        if (n <= 0) return n;  // error or connection closed
+        total += n;
+    }
+    return total;
+}
+
 WSServer::WSServer(std::shared_ptr<DataBuffer> buffer,
                    const std::string& host, uint16_t port,
                    const std::string& cert_path, const std::string& key_path)
@@ -90,7 +102,7 @@ void WSServer::stop() {
 
 
 size_t WSServer::client_count() const {
-    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(clients_mutex_));
+    std::lock_guard<std::mutex> lock(clients_mutex_);
     size_t n = 0;
     for (const auto& c : clients_) if (c->active.load()) ++n;
     return n;
@@ -105,6 +117,7 @@ bool WSServer::is_running() const { return running_.load(); }
 void WSServer::accept_loop() {
     while (running_.load()) {
         // Cleanup inactive clients: join thread, then erase
+        bool all_disconnected = false;
         {
             std::lock_guard<std::mutex> lock(clients_mutex_);
             for (auto it = clients_.begin(); it != clients_.end();) {
@@ -133,10 +146,14 @@ void WSServer::accept_loop() {
             // Detect transition: had clients → no clients
             if (had_clients_ && clients_.empty()) {
                 had_clients_ = false;
-                Logger::instance().info("WSServer", "All WebSocket clients disconnected — triggering cleanup");
-                if (on_all_disconnected_) {
-                    on_all_disconnected_();
-                }
+                all_disconnected = true;
+            }
+        }
+        // SC-H5: run heavy callback (HTTP calls + buffer clear) outside clients_mutex_
+        if (all_disconnected) {
+            Logger::instance().info("WSServer", "All WebSocket clients disconnected — triggering cleanup");
+            if (on_all_disconnected_) {
+                on_all_disconnected_();
             }
         }
 
@@ -244,23 +261,23 @@ bool WSServer::ws_send_binary(SSL* ssl, const uint8_t* data, size_t len) {
 
 bool WSServer::ws_read_frame(SSL* ssl, uint8_t& opcode, std::vector<uint8_t>& payload) {
     uint8_t hdr[2];
-    int n = SSL_read(ssl, hdr, 2);
+    int n = ssl_read_full(ssl, hdr, 2);
     if (n <= 0) return false;
     opcode = hdr[0] & 0x0F;
     bool masked = (hdr[1] & 0x80) != 0;
     uint64_t payload_len = hdr[1] & 0x7F;
     if (payload_len == 126) {
         uint8_t ext[2];
-        if (SSL_read(ssl, ext, 2) <= 0) return false;
+        if (ssl_read_full(ssl, ext, 2) <= 0) return false;
         payload_len = (ext[0] << 8) | ext[1];
     } else if (payload_len == 127) {
         uint8_t ext[8];
-        if (SSL_read(ssl, ext, 8) <= 0) return false;
+        if (ssl_read_full(ssl, ext, 8) <= 0) return false;
         payload_len = 0;
         for (int i = 0; i < 8; ++i) payload_len = (payload_len << 8) | ext[i];
     }
     uint8_t mask[4] = {0};
-    if (masked) { if (SSL_read(ssl, mask, 4) <= 0) return false; }
+    if (masked) { if (ssl_read_full(ssl, mask, 4) <= 0) return false; }
     if (payload_len > 0) {
         payload.resize(payload_len);
         size_t total = 0;

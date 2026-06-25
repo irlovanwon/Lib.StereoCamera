@@ -304,10 +304,11 @@ void SDKSlotManager::force_stop_all_captures() {
                 }
             }
 
+            auto types_copy = slot->active_types;
             slot->active_types.clear();
             slot->active_channels.clear();
 
-            for (const auto& type : slot->active_types) {
+            for (const auto& type : types_copy) {
                 buffer_->remove_slot(id, type);
             }
 

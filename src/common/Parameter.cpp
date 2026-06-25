@@ -33,12 +33,15 @@ Parameter Parameter::from_json(const nlohmann::json& j) {
     if (t == "integer") {
         p.type = ParameterType::Integer;
         p.value.int_val = j.at("value").get<int>();
+        p.value.type = ParameterType::Integer;
     } else if (t == "float") {
         p.type = ParameterType::Float;
         p.value.float_val = j.at("value").get<double>();
+        p.value.type = ParameterType::Float;
     } else if (t == "enum") {
         p.type = ParameterType::Enum;
         p.value.enum_val = j.at("value").get<std::string>();
+        p.value.type = ParameterType::Enum;
     }
     return p;
 }

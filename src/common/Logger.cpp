@@ -22,7 +22,9 @@ void Logger::log(Level level, const std::string& category, const std::string& me
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
     char time_buf[32];
-    std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&time_t));
+    std::tm tm_local;
+    localtime_r(&time_t, &tm_local);
+    std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_local);
 
     std::ostringstream oss;
     oss << "[" << time_buf << "] [" << level_str[static_cast<int>(level)]

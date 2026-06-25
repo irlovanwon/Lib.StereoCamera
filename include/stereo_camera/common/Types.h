@@ -62,6 +62,7 @@ struct ParameterValue {
     int int_val = 0;
     double float_val = 0.0;
     std::string enum_val;
+    ParameterType type = ParameterType::Integer;
 };
 
 enum class ResponseCode {

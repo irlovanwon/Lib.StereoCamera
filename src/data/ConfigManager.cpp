@@ -98,6 +98,7 @@ bool ConfigManager::load_app_config() {
             if (a2.contains("data")) {
                 auto& d = a2["data"];
                 app_config_.api2.data.transport = d.value("transport", "ipc");
+                app_config_.api2.data.zmq_hwm = d.value("zmq_hwm", 2);
                 if (d.contains("pub_endpoints") && d["pub_endpoints"].is_object()) {
                     for (auto& [key, val] : d["pub_endpoints"].items()) {
                         app_config_.api2.data.pub_endpoints[key] = val.get<std::string>();
@@ -119,6 +120,7 @@ bool ConfigManager::load_app_config() {
             }
             if (a3.contains("data")) {
                 auto& d = a3["data"];
+                app_config_.api3.data.zmq_hwm = d.value("zmq_hwm", 1);
                 if (d.contains("wss_server")) {
                     auto& w = d["wss_server"];
                     app_config_.api3.data.wss_server.host = w.value("host", "127.0.0.1");
