@@ -21,6 +21,7 @@ static std::atomic<bool> g_running{true};
 static void signal_handler(int) { g_running = false; }
 
 int main(int argc, char* argv[]) {
+    gst_init(&argc, &argv);
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN);

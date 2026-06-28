@@ -14,6 +14,8 @@
 #include <condition_variable>
 #include <openssl/ssl.h>
 #include <turbojpeg.h>
+#include <gst/gst.h>
+#include <gst/app/gstappsink.h>
 #include <functional>
 
 namespace stereo_camera {
@@ -106,6 +108,11 @@ private:
     std::condition_variable encode_cv_;
 
     int jpeg_quality_ = 80;
+    GstElement* gst_pipeline_ = nullptr;
+    GstElement* gst_appsink_ = nullptr;
+    std::mutex gst_mutex_;
+    std::condition_variable gst_cv_;
+    std::vector<uint8_t> gst_output_;
     std::atomic<uint32_t> frame_count_{0};
 
     DisconnectCallback on_all_disconnected_;
