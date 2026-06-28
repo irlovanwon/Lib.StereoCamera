@@ -9,7 +9,7 @@
 #include <chrono>
 #include <openssl/sha.h>
 #include <algorithm>
-#include <webp/encode.h>
+#include <turbojpeg.h>
 
 namespace stereo_camera {
 
@@ -362,22 +362,26 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
     uint32_t left_sz = 0;
     for (int img = 0; img < 2; img++) {
         const uint8_t* src = raw_concat.data() + (img == 0 ? 0 : half);
-        uint8_t* webp_buf = nullptr;
-        size_t webp_size = WebPEncodeBGRA(src, w, h, w * 4,
-                                          static_cast<float>(webp_quality_),
-                                          &webp_buf);
-        if (webp_size == 0 || !webp_buf) {
-            if (webp_buf) WebPFree(webp_buf);
+        tjhandle compressor = tjInitCompress();
+        unsigned char* jpeg_buf = nullptr;
+        unsigned long jpeg_size = 0;
+        int rc = tjCompress2(compressor, src, w, w * 4, h, TJPF_BGRA,
+                             &jpeg_buf, &jpeg_size, TJSAMP_420,
+                             jpeg_quality_, TJFLAG_FASTDCT);
+        if (rc != 0 || !jpeg_buf || jpeg_size == 0) {
+            if (jpeg_buf) tjFree(jpeg_buf);
+            tjDestroy(compressor);
             return false;
         }
         if (img == 0) {
-            left_sz = static_cast<uint32_t>(webp_size);
-            encoded_out.reserve(4 + webp_size + webp_size / 2);
+            left_sz = static_cast<uint32_t>(jpeg_size);
+            encoded_out.reserve(4 + jpeg_size + jpeg_size / 2);
             uint8_t* p = reinterpret_cast<uint8_t*>(&left_sz);
             encoded_out.insert(encoded_out.end(), p, p + 4);
         }
-        encoded_out.insert(encoded_out.end(), webp_buf, webp_buf + webp_size);
-        WebPFree(webp_buf);
+        encoded_out.insert(encoded_out.end(), jpeg_buf, jpeg_buf + jpeg_size);
+        tjFree(jpeg_buf);
+        tjDestroy(compressor);
     }
     return true;
 }

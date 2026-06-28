@@ -13,7 +13,7 @@
 #include <deque>
 #include <condition_variable>
 #include <openssl/ssl.h>
-#include <webp/encode.h>
+#include <turbojpeg.h>
 #include <functional>
 
 namespace stereo_camera {
@@ -105,7 +105,7 @@ private:
     std::mutex encode_mutex_;
     std::condition_variable encode_cv_;
 
-    int webp_quality_ = 50;
+    int jpeg_quality_ = 80;
     std::atomic<uint32_t> frame_count_{0};
 
     DisconnectCallback on_all_disconnected_;
