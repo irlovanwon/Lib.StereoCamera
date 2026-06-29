@@ -24,6 +24,8 @@ void DataPublisher::start() {
         zmq_setsockopt(sock, ZMQ_SNDHWM, &hwm, sizeof(hwm));
         int linger = 0;
         zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof(linger));
+        int immediate = 1;
+        zmq_setsockopt(sock, ZMQ_IMMEDIATE, &immediate, sizeof(immediate));
         if (zmq_bind(sock, endpoint.c_str()) != 0) {
             Logger::instance().error("DataPublisher",
                 "Bind failed " + channel + ": " + zmq_strerror(zmq_errno()));
