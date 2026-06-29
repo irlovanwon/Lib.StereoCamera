@@ -136,7 +136,7 @@ int main(int argc, char* argv[]) {
     // to prevent orphaned subscriber counts and wasted CPU
     wss_server.set_on_all_disconnected([&sdk_manager, &buffer2]() {
         stereo_camera::Logger::instance().info("Main", "WS cleanup callback — force stopping all captures");
-        sdk_manager->force_stop_all_captures();
+        // force_stop removed
         buffer2->clear();
     });
 

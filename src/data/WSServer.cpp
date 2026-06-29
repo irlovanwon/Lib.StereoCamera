@@ -347,7 +347,7 @@ void WSServer::send_to_one(WSSClient* session, DataType type,
 }
 
 
-static GstFlowReturn wss_gst_on_sample(GstAppSink* sink, gpointer udata) {
+GstFlowReturn wss_gst_on_sample(GstAppSink* sink, gpointer udata) {
     auto* self = static_cast<WSServer*>(udata);
     GstSample* sample = gst_app_sink_pull_sample(sink);
     if (!sample) return GST_FLOW_ERROR;

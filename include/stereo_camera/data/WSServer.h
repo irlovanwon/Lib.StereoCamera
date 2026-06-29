@@ -42,6 +42,7 @@ struct WSSClient {
 };
 
 class WSServer {
+    friend GstFlowReturn wss_gst_on_sample(GstAppSink*, gpointer);
 public:
     WSServer(std::shared_ptr<DataBuffer> buffer,
              const std::string& host, uint16_t port,
