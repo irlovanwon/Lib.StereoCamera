@@ -62,7 +62,7 @@ public:
     // Drop-NEWEST: returns silently if the queue is full.
     void push_encode(DataGroup group, const ChannelFrame& frame);
     void set_encode_queue_depth(size_t depth);
-    void set_poll_interval_ms(int publish_ms, int encode_ms, int send_ms, int gst_timeout_ms);
+    void set_cv_timeout_ms(int publish_ms, int encode_ms, int send_ms, int gst_timeout_ms);
     void broadcast(const std::string& message);
 
 private:
@@ -110,9 +110,9 @@ private:
     std::condition_variable encode_cv_;
 
     int jpeg_quality_ = 80;
-    int publish_poll_interval_ms_ = 10;
-    int encode_poll_interval_ms_ = 10;
-    int send_poll_interval_ms_ = 10;
+    int publish_cv_timeout_ms_ = 10;
+    int encode_cv_timeout_ms_ = 10;
+    int send_cv_timeout_ms_ = 10;
     int gst_encode_timeout_ms_ = 1000;
     GstElement* gst_pipeline_ = nullptr;
     GstElement* gst_appsink_ = nullptr;

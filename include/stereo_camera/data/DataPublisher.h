@@ -22,7 +22,7 @@ public:
     void stop();
     bool is_running() const;
     void set_zmq_context(void* ctx) { shared_ctx_ = ctx; }
-    void set_publish_poll_interval_ms(int ms) { publish_poll_interval_ms_ = ms; }
+    void set_publish_cv_timeout_ms(int ms) { publish_cv_timeout_ms_ = ms; }
     void notify_new_data();
     void publish_shutdown();
 
@@ -39,7 +39,7 @@ private:
     void* shared_ctx_ = nullptr;
     bool owns_ctx_ = false;
     std::unordered_map<std::string, void*> zmq_sockets_;
-    int publish_poll_interval_ms_ = 10;
+    int publish_cv_timeout_ms_ = 10;
     std::mutex sockets_mutex_;
 };
 

@@ -113,7 +113,7 @@ void DataPublisher::pub_loop() {
     while (running_.load()) {
         {
             std::unique_lock<std::mutex> lk(pipeline_->cv_mutex);
-            pipeline_->cv.wait_for(lk, std::chrono::milliseconds(publish_poll_interval_ms_),
+            pipeline_->cv.wait_for(lk, std::chrono::milliseconds(publish_cv_timeout_ms_),
                 [this] { return !running_.load() || pipeline_->has_data(); });
         }
         if (!running_.load()) break;

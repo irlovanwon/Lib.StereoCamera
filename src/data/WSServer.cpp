@@ -455,7 +455,7 @@ void WSServer::set_encode_queue_depth(size_t depth) {
     encode_queue_3d_.set_max_depth(depth);
     encode_queue_sensor_.set_max_depth(depth);
 }
-void WSServer::set_poll_interval_ms(int publish_ms, int encode_ms, int send_ms, int gst_timeout_ms) {    publish_poll_interval_ms_ = publish_ms;    encode_poll_interval_ms_ = encode_ms;    send_poll_interval_ms_ = send_ms;    gst_encode_timeout_ms_ = gst_timeout_ms;}
+void WSServer::set_cv_timeout_ms(int publish_ms, int encode_ms, int send_ms, int gst_timeout_ms) {    publish_cv_timeout_ms_ = publish_ms;    encode_cv_timeout_ms_ = encode_ms;    send_cv_timeout_ms_ = send_ms;    gst_encode_timeout_ms_ = gst_timeout_ms;}
 
 bool WSServer::has_encode_data() const {
     return !encode_queue_2d_.empty() ||
@@ -500,7 +500,7 @@ void WSServer::encode_loop() {
 
         if (!got_data) {
             std::unique_lock<std::mutex> lk(encode_mutex_);
-            encode_cv_.wait_for(lk, std::chrono::milliseconds(encode_poll_interval_ms_),
+            encode_cv_.wait_for(lk, std::chrono::milliseconds(encode_cv_timeout_ms_),
                 [this] { return !running_.load() || has_encode_data(); });
         }
     }
@@ -618,7 +618,7 @@ void WSServer::send_loop(WSSClient* session) {
         SendItem item;
         {
             std::unique_lock<std::mutex> lk(session->send_queue_mutex);
-            session->send_queue_cv.wait_for(lk, std::chrono::milliseconds(send_poll_interval_ms_),
+            session->send_queue_cv.wait_for(lk, std::chrono::milliseconds(send_cv_timeout_ms_),
                 [&] { return !session->send_queue.empty() || !session->send_running.load(); });
             if (session->send_queue.empty()) continue;
             item = session->send_queue.front();
