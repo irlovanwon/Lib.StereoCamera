@@ -436,13 +436,16 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
 
 void WSServer::push_encode(DataGroup group, const ChannelFrame& frame) {
     bool pushed = false;
+static int push_total = 0, push_ok = 0, push_drop = 0;    push_total++;
     switch (group) {
         case DataGroup::VisualGeometric2D: pushed = encode_queue_2d_.try_push(frame); break;
+            if (pushed) push_ok++; else push_drop++;
         case DataGroup::VisualGeometric3D: pushed = encode_queue_3d_.try_push(frame); break;
         case DataGroup::SensorTracking:    pushed = encode_queue_sensor_.try_push(frame); break;
     }
     if (pushed) {
         std::lock_guard<std::mutex> lk(encode_mutex_);
+    if (push_total % 200 == 1 && pushed) { Logger::instance().info("WSServer", "push_encode 2D: " + std::to_string(push_total) + " total, " + std::to_string(push_ok) + " ok, " + std::to_string(push_drop) + " drop"); }
         encode_cv_.notify_one();
     }
 }
