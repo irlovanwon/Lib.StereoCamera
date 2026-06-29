@@ -387,7 +387,7 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
             "caps=video/x-raw,format=BGRA,width=" + std::to_string(w) +
             ",height=" + std::to_string(h) + ",framerate=30/1 "
             "! videoconvert ! video/x-raw,format=I420 "
-            "! jpegenc quality=" + std::to_string(jpeg_quality_) + " "
+            "! nvjpegenc quality=" + std::to_string(jpeg_quality_) + " "
             "! appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true";
         GError* err = nullptr;
         gst_pipeline_ = gst_parse_launch(pipe.c_str(), &err);
