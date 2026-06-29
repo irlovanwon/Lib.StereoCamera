@@ -27,7 +27,7 @@
         },
         "data": {
             "transport": "ipc",
-            "zmq_hwm": 2,
+            "zmq_hwm": 30,
             "pub_endpoints": {
                 "visual_geometric_2d": "ipc:///tmp/sc_pub_2d",
                 "visual_geometric_3d": "ipc:///tmp/sc_pub_3d",
@@ -53,7 +53,7 @@
                 "thread_strategy": "one_loop_per_thread",
                 "worker_threads": 2
             },
-            "zmq_hwm": 1,
+            "zmq_hwm": 30,
             "sub_endpoints": {
                 "visual_geometric_2d": "ipc:///tmp/sc_pub_2d",
                 "visual_geometric_3d": "ipc:///tmp/sc_pub_3d",
