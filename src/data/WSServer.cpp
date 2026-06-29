@@ -383,7 +383,7 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
     // Lazy-init GStreamer pipeline (reuse for lifetime)
     if (!gst_pipeline_) {
         std::string pipe =
-            "appsrc name=src is-live=true format=time "
+            "appsrc name=src "
             "caps=video/x-raw,format=BGRx,width=" + std::to_string(w) +
             ",height=" + std::to_string(h) + ",framerate=30/1 "
             "! nvvidconv ! video/x-raw,format=I420 "
@@ -414,7 +414,7 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
             std::unique_lock<std::mutex> lk(gst_mutex_);
             gst_output_.clear();
             gst_app_src_push_buffer(GST_APP_SRC(appsrc), buf);
-            if (gst_cv_.wait_for(lk, std::chrono::milliseconds(1000)) == std::cv_status::timeout) {
+            if (gst_cv_.wait_for(lk, std::chrono::milliseconds(gst_encode_timeout_ms_)) == std::cv_status::timeout) {
                 gst_object_unref(appsrc);
                 return false;
             }
@@ -452,6 +452,7 @@ void WSServer::set_encode_queue_depth(size_t depth) {
     encode_queue_3d_.set_max_depth(depth);
     encode_queue_sensor_.set_max_depth(depth);
 }
+void WSServer::set_poll_interval_ms(int publish_ms, int encode_ms, int send_ms, int gst_timeout_ms) {    publish_poll_interval_ms_ = publish_ms;    encode_poll_interval_ms_ = encode_ms;    send_poll_interval_ms_ = send_ms;    gst_encode_timeout_ms_ = gst_timeout_ms;}
 
 bool WSServer::has_encode_data() const {
     return !encode_queue_2d_.empty() ||
@@ -496,7 +497,7 @@ void WSServer::encode_loop() {
 
         if (!got_data) {
             std::unique_lock<std::mutex> lk(encode_mutex_);
-            encode_cv_.wait_for(lk, std::chrono::milliseconds(100),
+            encode_cv_.wait_for(lk, std::chrono::milliseconds(encode_poll_interval_ms_),
                 [this] { return !running_.load() || has_encode_data(); });
         }
     }
@@ -614,7 +615,7 @@ void WSServer::send_loop(WSSClient* session) {
         SendItem item;
         {
             std::unique_lock<std::mutex> lk(session->send_queue_mutex);
-            session->send_queue_cv.wait_for(lk, std::chrono::milliseconds(100),
+            session->send_queue_cv.wait_for(lk, std::chrono::milliseconds(send_poll_interval_ms_),
                 [&] { return !session->send_queue.empty() || !session->send_running.load(); });
             if (session->send_queue.empty()) continue;
             item = session->send_queue.front();

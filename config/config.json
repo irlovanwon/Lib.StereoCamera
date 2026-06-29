@@ -63,7 +63,11 @@
     },
     "spsc": {
         "queue_size": 4,
-        "drop_policy": "newest"
+        "drop_policy": "newest",
+        "publish_poll_interval_ms": 10,
+        "encode_poll_interval_ms": 10,
+        "send_poll_interval_ms": 10,
+        "gst_encode_timeout_ms": 1000
     },
     "data_buffer_depth": 3,
     "log_level": "info"

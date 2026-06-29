@@ -73,6 +73,7 @@ int main(int argc, char* argv[]) {
     auto publisher = std::make_shared<stereo_camera::DataPublisher>(
         pipeline, cfg.api2.data.pub_endpoints, cfg.api2.data.zmq_hwm);
     publisher->set_zmq_context(shared_zmq_ctx);
+    publisher->set_publish_poll_interval_ms(cfg.spsc.publish_poll_interval_ms);
 
     // DataBuffer #2 — LoopbackSubscriber → WSServer
     auto buffer2 = std::make_shared<stereo_camera::DataBuffer>(cfg.data_buffer_depth);
@@ -94,6 +95,7 @@ int main(int argc, char* argv[]) {
         static_cast<uint16_t>(cfg.api3.data.wss_server.port),
         cert_path, key_path);
     wss_server.set_encode_queue_depth(qs);
+    wss_server.set_poll_interval_ms(cfg.spsc.publish_poll_interval_ms, cfg.spsc.encode_poll_interval_ms, cfg.spsc.send_poll_interval_ms, cfg.spsc.gst_encode_timeout_ms);
 
     // Feed the WSServer encode SPSC queues directly from the loopback thread
     // (replaces the encode_loop's 10ms DataBuffer polling).

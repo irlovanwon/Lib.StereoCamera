@@ -70,6 +70,10 @@ struct Api3Config {
 struct SpscConfig {
     int queue_size = 4;
     std::string drop_policy = "newest";
+    int publish_poll_interval_ms = 10;
+    int encode_poll_interval_ms = 10;
+    int send_poll_interval_ms = 10;
+    int gst_encode_timeout_ms = 1000;
 };
 
 struct AppConfig {
