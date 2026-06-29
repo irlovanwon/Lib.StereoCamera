@@ -33,6 +33,7 @@ Response ClientHandler::handle_connect(const std::string& client_id) {
     if (session.connected) {
         return make_response(ResponseCode::AlreadyInit, "Already connected");
     }
+    if (sdk_manager_) { sdk_manager_->start_all(); }
     session.id = client_id;
     session.connected = true;
     Logger::instance().info("ClientHandler", "Connect: " + client_id);
