@@ -384,9 +384,9 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
     if (!gst_pipeline_) {
         std::string pipe =
             "appsrc name=src is-live=true format=time "
-            "caps=video/x-raw,format=BGRA,width=" + std::to_string(w) +
+            "caps=video/x-raw,format=BGRx,width=" + std::to_string(w) +
             ",height=" + std::to_string(h) + ",framerate=30/1 "
-            "! videoconvert ! video/x-raw,format=I420 "
+            "! nvvidconv ! video/x-raw,format=I420 "
             "! nvjpegenc quality=" + std::to_string(jpeg_quality_) + " "
             "! appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true";
         GError* err = nullptr;
