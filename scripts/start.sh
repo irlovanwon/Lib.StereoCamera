@@ -15,6 +15,32 @@ LOG_FILE="${LOG_DIR}/${APP_NAME}.log"
 
 mkdir -p "${LOG_DIR}"
 
+kill_all_instances() {
+    local pids
+    pids=$(pgrep -f "stereo_camera_node" 2>/dev/null)
+    if [ -n "$pids" ]; then
+        echo "[StereoCamera] Stopping all instances: $pids"
+        for pid in $pids; do
+            kill -TERM "$pid" 2>/dev/null || true
+        done
+        local count=0
+        while pgrep -f "stereo_camera_node" > /dev/null 2>&1; do
+            sleep 0.5
+            count=$((count + 1))
+            if [ $count -ge 20 ]; then
+                echo "[StereoCamera] Force-killing survivors..."
+                pids=$(pgrep -f "stereo_camera_node" 2>/dev/null)
+                for pid in $pids; do
+                    kill -9 "$pid" 2>/dev/null || true
+                done
+                break
+            fi
+        done
+        echo "[StereoCamera] All instances stopped."
+    fi
+    rm -f "${PID_FILE}"
+}
+
 is_running() {
     if [ -f "${PID_FILE}" ]; then
         local pid
@@ -36,10 +62,9 @@ do_build() {
 }
 
 do_start() {
-    if is_running; then
-        echo "[StereoCamera] Already running (PID: $(cat "${PID_FILE}"))"
-        return 0
-    fi
+    # Kill any existing instances first (prevents duplicates from manual starts)
+    kill_all_instances
+    sleep 0.5
 
     if [ ! -f "${BIN}" ]; then
         do_build
@@ -64,30 +89,7 @@ do_start() {
 }
 
 do_stop() {
-    if ! is_running; then
-        echo "[StereoCamera] Not running."
-        rm -f "${PID_FILE}"
-        return 0
-    fi
-
-    local pid
-    pid=$(cat "${PID_FILE}")
-    echo "[StereoCamera] Stopping (PID: ${pid})..."
-    kill -TERM "${pid}" 2>/dev/null || true
-
-    local count=0
-    while kill -0 "${pid}" 2>/dev/null; do
-        sleep 0.5
-        count=$((count + 1))
-        if [ ${count} -ge 20 ]; then
-            echo "[StereoCamera] Force killing..."
-            kill -9 "${pid}" 2>/dev/null || true
-            break
-        fi
-    done
-
-    rm -f "${PID_FILE}"
-    echo "[StereoCamera] Stopped."
+    kill_all_instances
 }
 
 do_status() {
