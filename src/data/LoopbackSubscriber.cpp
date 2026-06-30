@@ -59,7 +59,7 @@ void LoopbackSubscriber::sub_loop() {
             zmq_pollitem_t poll;
             poll.socket = zmq_sockets_[i];
             poll.events = ZMQ_POLLIN;
-            int rc = zmq_poll(&poll, 1, 100);
+            int rc = zmq_poll(&poll, 1, 10);
             if (rc <= 0 || !(poll.revents & ZMQ_POLLIN)) continue;
 
             std::vector<std::vector<uint8_t>> zparts;
