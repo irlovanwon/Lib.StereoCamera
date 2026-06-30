@@ -73,7 +73,6 @@ struct SpscConfig {
     int publish_cv_timeout_ms = 10;
     int encode_cv_timeout_ms = 10;
     int send_cv_timeout_ms = 10;
-    int gst_encode_timeout_ms = 1000;
 };
 
 struct AppConfig {

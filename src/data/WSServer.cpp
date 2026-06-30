@@ -9,9 +9,6 @@
 #include <chrono>
 #include <openssl/sha.h>
 #include <algorithm>
-#include <gst/gst.h>
-#include <gst/app/gstappsrc.h>
-#include <gst/app/gstappsink.h>
 #include <turbojpeg.h>
 
 namespace stereo_camera {
@@ -89,7 +86,6 @@ void WSServer::stop() {
     encode_cv_.notify_all();
     if (accept_thread_ && accept_thread_->joinable()) accept_thread_->join();
     if (encode_thread_ && encode_thread_->joinable()) encode_thread_->join();
-    if (gst_pipeline_) { gst_element_set_state(gst_pipeline_, GST_STATE_NULL); gst_object_unref(gst_appsink_); gst_object_unref(gst_pipeline_); gst_pipeline_ = nullptr; gst_appsink_ = nullptr; }
 
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
@@ -347,21 +343,6 @@ void WSServer::send_to_one(WSSClient* session, DataType type,
 }
 
 
-GstFlowReturn wss_gst_on_sample(GstAppSink* sink, gpointer udata) {
-    auto* self = static_cast<WSServer*>(udata);
-    GstSample* sample = gst_app_sink_pull_sample(sink);
-    if (!sample) return GST_FLOW_ERROR;
-    GstBuffer* buf = gst_sample_get_buffer(sample);
-    GstMapInfo map;
-    if (buf && gst_buffer_map(buf, &map, GST_MAP_READ)) {
-        std::lock_guard<std::mutex> lk(self->gst_mutex_);
-        self->gst_output_.assign(map.data, map.data + map.size);
-        gst_buffer_unmap(buf, &map);
-        self->gst_cv_.notify_one();
-    }
-    gst_sample_unref(sample);
-    return GST_FLOW_OK;
-}
 
 bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
                                     std::vector<uint8_t>& encoded_out) {
@@ -369,7 +350,6 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
     size_t half = raw_concat.size() / 2;
     size_t pixels = half / 4;
     if (pixels == 0 || half % 4 != 0) return false;
-
     int w = 0, h = 0;
     static const struct { int pw, w, h; } res[] = {
         {(int)(1280*720),  1280, 720},  {(int)(1920*1080), 1920, 1080},
@@ -379,60 +359,28 @@ bool WSServer::encode_stereo_image(const std::vector<uint8_t>& raw_concat,
     for (auto& r : res)
         if ((int)pixels == r.pw) { w = r.w; h = r.h; break; }
     if (w == 0) return false;
-
-    // Lazy-init GStreamer pipeline (reuse for lifetime)
-    if (!gst_pipeline_) {
-        std::string pipe =
-            "appsrc name=src "
-            "caps=video/x-raw,format=BGRx,width=" + std::to_string(w) +
-            ",height=" + std::to_string(h) + ",framerate=30/1 "
-            "! nvvidconv ! video/x-raw,format=I420 "
-            "! nvjpegenc quality=" + std::to_string(jpeg_quality_) + " "
-            "! appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true";
-        GError* err = nullptr;
-        gst_pipeline_ = gst_parse_launch(pipe.c_str(), &err);
-        if (!gst_pipeline_) { if (err) g_error_free(err); return false; }
-        gst_appsink_ = gst_bin_get_by_name(GST_BIN(gst_pipeline_), "sink");
-        g_signal_connect(gst_appsink_, "new-sample", G_CALLBACK(wss_gst_on_sample), this);
-        gst_element_set_state(gst_pipeline_, GST_STATE_PLAYING);
-    }
-
-    GstElement* appsrc = gst_bin_get_by_name(GST_BIN(gst_pipeline_), "src");
-    if (!appsrc) return false;
-
     uint32_t left_sz = 0;
     for (int img = 0; img < 2; img++) {
-        const uint8_t* src_data = raw_concat.data() + (img == 0 ? 0 : half);
-
-        GstBuffer* buf = gst_buffer_new_allocate(nullptr, half, nullptr);
-        GstMapInfo map;
-        gst_buffer_map(buf, &map, GST_MAP_WRITE);
-        std::memcpy(map.data, src_data, half);
-        gst_buffer_unmap(buf, &map);
-
-        {
-            std::unique_lock<std::mutex> lk(gst_mutex_);
-            gst_output_.clear();
-            gst_app_src_push_buffer(GST_APP_SRC(appsrc), buf);
-            if (gst_cv_.wait_for(lk, std::chrono::milliseconds(gst_encode_timeout_ms_)) == std::cv_status::timeout) {
-                gst_object_unref(appsrc);
-                return false;
-            }
-        }
-
-        if (gst_output_.empty()) { gst_object_unref(appsrc); return false; }
-
+        const uint8_t* src = raw_concat.data() + (img == 0 ? 0 : half);
+        unsigned char* jpg = nullptr;
+        unsigned long jpg_size = 0;
+        tjhandle tj = tjInitCompress();
+        int ret = tjCompress2(tj, src, w, w * 4, h, TJPF_BGRA, &jpg, &jpg_size,
+                              TJSAMP_420, jpeg_quality_, TJFLAG_FASTDCT);
+        tjDestroy(tj);
+        if (ret != 0 || !jpg) return false;
         if (img == 0) {
-            left_sz = static_cast<uint32_t>(gst_output_.size());
-            encoded_out.reserve(4 + gst_output_.size() * 2);
+            left_sz = static_cast<uint32_t>(jpg_size);
+            encoded_out.reserve(4 + jpg_size * 2);
             uint8_t* p = reinterpret_cast<uint8_t*>(&left_sz);
             encoded_out.insert(encoded_out.end(), p, p + 4);
         }
-        encoded_out.insert(encoded_out.end(), gst_output_.begin(), gst_output_.end());
+        encoded_out.insert(encoded_out.end(), jpg, jpg + jpg_size);
+        tjFree(jpg);
     }
-    gst_object_unref(appsrc);
     return true;
 }
+
 
 void WSServer::push_encode(DataGroup group, const ChannelFrame& frame) {
     bool pushed = false;
@@ -455,7 +403,7 @@ void WSServer::set_encode_queue_depth(size_t depth) {
     encode_queue_3d_.set_max_depth(depth);
     encode_queue_sensor_.set_max_depth(depth);
 }
-void WSServer::set_cv_timeout_ms(int publish_ms, int encode_ms, int send_ms, int gst_timeout_ms) {    publish_cv_timeout_ms_ = publish_ms;    encode_cv_timeout_ms_ = encode_ms;    send_cv_timeout_ms_ = send_ms;    gst_encode_timeout_ms_ = gst_timeout_ms;}
+void WSServer::set_cv_timeout_ms(int publish_ms, int encode_ms, int send_ms) {    publish_cv_timeout_ms_ = publish_ms;    encode_cv_timeout_ms_ = encode_ms;    send_cv_timeout_ms_ = send_ms;}
 
 bool WSServer::has_encode_data() const {
     return !encode_queue_2d_.empty() ||

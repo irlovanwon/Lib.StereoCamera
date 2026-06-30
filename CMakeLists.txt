@@ -12,7 +12,6 @@ pkg_check_modules(ZMQ REQUIRED libzmq)
 pkg_check_modules(CURL REQUIRED libcurl)
 pkg_check_modules(OPENSSL REQUIRED openssl)
 pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
-include_directories(/usr/include/gstreamer-1.0 /usr/include/aarch64-linux-gnu /usr/include/glib-2.0 /usr/lib/aarch64-linux-gnu/glib-2.0/include)
 
 set(LIB_SOURCES
     src/common/Parameter.cpp
@@ -44,7 +43,7 @@ target_include_directories(stereo_camera_lib PUBLIC
     ${WEBP_INCLUDE_DIRS}
 )
 target_link_libraries(stereo_camera_lib PUBLIC
-    -lturbojpeg -lgstreamer-1.0 -lgstapp-1.0 -lgobject-2.0 -lglib-2.0
+    -lturbojpeg
     ${ZMQ_LIBRARIES}
     ${CURL_LIBRARIES}
     ${OPENSSL_LIBRARIES}

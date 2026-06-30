@@ -64,7 +64,6 @@
     "spsc": {
         "queue_size": 4,
         "drop_policy": "newest",
-        "gst_encode_timeout_ms": 1000,
         "publish_cv_timeout_ms": 10,
         "encode_cv_timeout_ms": 10,
         "send_cv_timeout_ms": 10

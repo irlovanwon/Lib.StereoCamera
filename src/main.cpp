@@ -21,7 +21,6 @@ static std::atomic<bool> g_running{true};
 static void signal_handler(int) { g_running = false; }
 
 int main(int argc, char* argv[]) {
-    gst_init(&argc, &argv);
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN);
@@ -95,7 +94,7 @@ int main(int argc, char* argv[]) {
         static_cast<uint16_t>(cfg.api3.data.wss_server.port),
         cert_path, key_path);
     wss_server.set_encode_queue_depth(qs);
-    wss_server.set_cv_timeout_ms(cfg.spsc.publish_cv_timeout_ms, cfg.spsc.encode_cv_timeout_ms, cfg.spsc.send_cv_timeout_ms, cfg.spsc.gst_encode_timeout_ms);
+    wss_server.set_cv_timeout_ms(cfg.spsc.publish_cv_timeout_ms, cfg.spsc.encode_cv_timeout_ms, cfg.spsc.send_cv_timeout_ms);
 
     // Feed the WSServer encode SPSC queues directly from the loopback thread
     // (replaces the encode_loop's 10ms DataBuffer polling).
