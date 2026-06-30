@@ -126,18 +126,27 @@ void DataPublisher::pub_loop() {
             auto it = zmq_sockets_.find("visual_geometric_2d");
             if (it != zmq_sockets_.end())
                 publish_group("visual_geometric_2d", it->second, frame);
+            if (pub_callback_ && !frame.bundles.empty()) {
+                pub_callback_(frame);
+            }
         }
         // Pop from 3D queue
         while (pipeline_->queue_3d.pop(frame)) {
             auto it = zmq_sockets_.find("visual_geometric_3d");
             if (it != zmq_sockets_.end())
                 publish_group("visual_geometric_3d", it->second, frame);
+            if (pub_callback_ && !frame.bundles.empty()) {
+                pub_callback_(frame);
+            }
         }
         // Pop from sensor queue
         while (pipeline_->queue_sensor.pop(frame)) {
             auto it = zmq_sockets_.find("sensor_tracking");
             if (it != zmq_sockets_.end())
                 publish_group("sensor_tracking", it->second, frame);
+            if (pub_callback_ && !frame.bundles.empty()) {
+                pub_callback_(frame);
+            }
         }
     }
     Logger::instance().info("DataPublisher", "Pub loop exited");

@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <zmq.h>
+#include <functional>
 
 namespace stereo_camera {
 
@@ -26,6 +27,9 @@ public:
     void notify_new_data();
     void publish_shutdown();
 
+    using PubCallback = std::function<void(const ChannelFrame&)>;
+    void set_pub_callback(PubCallback cb) { pub_callback_ = std::move(cb); }
+
 private:
     void pub_loop();
     void publish_group(const std::string& channel, void* sock, ChannelFrame& frame);
@@ -40,6 +44,7 @@ private:
     bool owns_ctx_ = false;
     std::unordered_map<std::string, void*> zmq_sockets_;
     int publish_cv_timeout_ms_ = 10;
+    PubCallback pub_callback_;
     std::mutex sockets_mutex_;
 };
 

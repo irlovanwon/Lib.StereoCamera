@@ -6,7 +6,6 @@
 #include "stereo_camera/data/DataBuffer.h"
 #include "stereo_camera/data/DataPipeline.h"
 #include "stereo_camera/data/DataPublisher.h"
-#include "stereo_camera/data/LoopbackSubscriber.h"
 #include "stereo_camera/data/WSServer.h"
 #include "stereo_camera/data/SDKSlotManager.h"
 #include "stereo_camera/data/ConfigManager.h"
@@ -74,13 +73,8 @@ int main(int argc, char* argv[]) {
     publisher->set_zmq_context(shared_zmq_ctx);
     publisher->set_publish_cv_timeout_ms(cfg.spsc.publish_cv_timeout_ms);
 
-    // DataBuffer #2 — LoopbackSubscriber → WSServer
     auto buffer2 = std::make_shared<stereo_camera::DataBuffer>(cfg.data_buffer_depth);
 
-    // LoopbackSubscriber — subscribes to 3 grouped PUB channels → DataBuffer #2
-    stereo_camera::LoopbackSubscriber loopback(buffer2, cfg.api3.data.sub_endpoints,
-                                                cfg.api3.data.zmq_hwm);
-    loopback.set_zmq_context(shared_zmq_ctx);
 
     // TLS certs
     const std::string& api3_cert = cfg.api3.admin_server.cert_path;
@@ -96,12 +90,6 @@ int main(int argc, char* argv[]) {
     wss_server.set_encode_queue_depth(qs);
     wss_server.set_cv_timeout_ms(cfg.spsc.publish_cv_timeout_ms, cfg.spsc.encode_cv_timeout_ms, cfg.spsc.send_cv_timeout_ms);
 
-    // Feed the WSServer encode SPSC queues directly from the loopback thread
-    // (replaces the encode_loop's 10ms DataBuffer polling).
-    loopback.set_encode_callback(
-        [&wss_server](stereo_camera::DataGroup g, const stereo_camera::ChannelFrame& f) {
-            wss_server.push_encode(g, f);
-        });
 
     auto client_handler = std::make_shared<stereo_camera::ClientHandler>();
     client_handler->set_sdk_manager(sdk_manager);
@@ -130,7 +118,16 @@ int main(int argc, char* argv[]) {
     api2_server.start();
 
     publisher->start();
-    loopback.start();
+
+    // Feed API3 encode SPSC + DataBuffer #2 directly from DataPublisher (no ZMQ loopback)
+    publisher->set_pub_callback([&](const stereo_camera::ChannelFrame& frame) {
+        for (const auto& b : frame.bundles) {
+            buffer2->push(frame.camera_id, b);
+        }
+        if (!frame.bundles.empty()) {
+            wss_server.push_encode(stereo_camera::data_type_to_group(frame.bundles[0]->type), frame);
+        }
+    });
     wss_server.start();
 
     // Auto-cleanup: when all WebSocket clients disconnect, force-stop all captures
@@ -146,7 +143,6 @@ int main(int argc, char* argv[]) {
     stereo_camera::Logger::instance().info("Main", "API 2a HTTPS: " + cfg.api2.server.host + ":" + std::to_string(cfg.api2.server.port));
     stereo_camera::Logger::instance().info("Main", "API 2b PUB: " + std::to_string(cfg.api2.data.pub_endpoints.size()) + " grouped channels (HWM=" + std::to_string(cfg.api2.data.zmq_hwm) + ")");
     stereo_camera::Logger::instance().info("Main", "API 1a Camera SDK: " + sdk_cfg.base_url);
-    stereo_camera::Logger::instance().info("Main", "API 3b-1 LoopbackSubscriber: " + std::to_string(cfg.api3.data.sub_endpoints.size()) + " grouped channels");
     stereo_camera::Logger::instance().info("Main", "API 3b-2 WSS: " + cfg.api3.data.wss_server.host + ":" + std::to_string(cfg.api3.data.wss_server.port));
     stereo_camera::Logger::instance().info("Main", "SPSC: queue_size=" + std::to_string(qs) + ", drop_policy=" + cfg.spsc.drop_policy);
 
@@ -161,7 +157,6 @@ int main(int argc, char* argv[]) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     wss_server.stop();
-    loopback.stop();
     publisher->stop();
     sdk_manager->stop_all();
     if (shared_zmq_ctx) {
