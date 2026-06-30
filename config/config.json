@@ -69,6 +69,6 @@
         "encode_cv_timeout_ms": 10,
         "send_cv_timeout_ms": 10
     },
-    "data_buffer_depth": 3,
+    "data_buffer_depth": 1,
     "log_level": "info"
 }
